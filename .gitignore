@@ -1,0 +1,62 @@
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+
+# Jupyter and VS Code
+.ipynb_checkpoints/
+.vscode/
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Logs and databases
+*.log
+*.sqlite3
+*.db
+*.sqlite
+# Temporary files
+*.tmp
+*.swp
+*.bak
+*.~*
+# Coverage reports
+htmlcov/
+.coverage
+.coverage.*
+.nox/
+.pytest_cache/
+.tox/
+nosetests.xml
+coverage.xml
+
+# Documents
+*.doc
+*.docx
+_build/
+*.pdf
+*.ppt
+*.pptx
+*.odt
+*.rtf
+*.tex
+*.epub
+
+# Configuration files
+*.ini
+*.cfg
+*.toml
+
+# Environment variables
+.env 
