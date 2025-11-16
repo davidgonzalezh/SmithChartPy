@@ -45,7 +45,7 @@ coverage.xml
 *.doc
 *.docx
 _build/
-*.pdf
+#*.pdf
 *.ppt
 *.pptx
 *.odt
