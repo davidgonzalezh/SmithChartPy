@@ -16,12 +16,21 @@ y anotaciones por hover.
   en las cartas de Smith completas clásicas.
 """
 # Importaciones necesarias 
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Tuple
 
 import matplotlib.pyplot as plt                     # Librería para gráficos  
 import numpy as np                                  # Librería para cálculos numéricos   
 from matplotlib.backend_bases import RendererBase   # Base para renderizadores de Matplotlib
 from matplotlib.patches import Circle               # Para dibujar círculos
+from matplotlib.transforms import Affine2D         # Para transformaciones
+
+# Constantes de diseño de la carta
+RADIO_CARTA = 1.0
+ESCALA_ANGULO_INTERNA = 1.06
+ESCALA_ANGULO_EXTERNA = 1.11
+ESCALA_LONGITUD_GENERADOR = 1.18
+ESCALA_LONGITUD_CARGA = 1.24
+ESCALA_PARAMETROS = 1.34
 
 # Función para envolver ángulos en grados
 def _envolver_angulo_deg(valor: float) -> float:
@@ -36,7 +45,7 @@ def leer_parametros_usuario():
     - ZL: impedancia de carga compleja [ohmios], a partir de su parte real (R_L)
       e imaginaria (X_L).
 
-    Returns
+    Retorna
     -------
     Z0 : float
         Impedancia característica de la línea.
@@ -125,7 +134,7 @@ def calcular_reflexion_y_parametros(Z0, ZL) -> dict[str, Any]:
     else:
         RFL_LOSS_dB = -10 * np.log10(P_trans)
 
-    ATTEN_dB = np.inf if np.isclose(gamma_mag, 0.0) else -10 * np.log10(gamma_mag)
+    ATTEN_dB = np.inf if np.isclose(gamma_mag, 0.0) else -20 * np.log10(gamma_mag)
 
     if np.isfinite(SWR) and SWR > 0:
         SW_LOSS_COEFF = (1 + SWR**2) / (2 * SWR)
@@ -164,57 +173,62 @@ def calcular_reflexion_y_parametros(Z0, ZL) -> dict[str, Any]:
 
 # Función para imprimir el procedimiento paso a paso 
 def imprimir_procedimiento(Z0, ZL, resultados):
-    """Imprime en consola un resumen paso a paso con unidades."""
-    print()
-    print("=== Procedimiento paso a paso ===")
-    print("1) Datos de entrada:")
-    print(f"   Z0 = {Z0:.2f} Ω")
-    print(f"   ZL = {ZL.real:.2f} + j{ZL.imag:.2f} Ω")
+    """Imprime en consola un resumen paso a paso con unidades y lo devuelve como texto."""
+    lineas: List[str] = []
+    lineas.append("")
+    lineas.append("=== Procedimiento paso a paso ===")
+    lineas.append("1) Datos de entrada:")
+    lineas.append(f"   Z0 = {Z0:.2f} Ω")
+    lineas.append(f"   ZL = {ZL.real:.2f} + j{ZL.imag:.2f} Ω")
 
     z_norm = resultados["z_norm"]
-    print("2) Impedancia normalizada z_N = ZL / Z0:")
-    print(f"   z_N = {z_norm.real:.2f} + j{z_norm.imag:.2f} (adimensional)")
+    lineas.append("2) Impedancia normalizada z_N = ZL / Z0:")
+    lineas.append(f"   z_N = {z_norm.real:.2f} + j{z_norm.imag:.2f} (adimensional)")
 
     gamma_L = resultados["gamma_L"]
-    print("3) Coeficiente de reflexión en la carga:")
-    print(f"   Γ_L = (z_N - 1) / (z_N + 1) = {gamma_L.real:.2f} + j{gamma_L.imag:.2f}")
-    print(f"   |Γ_L| = {resultados['gamma_mag']:.2f} (adimensional)")
-    print(f"   ∠Γ_L = {resultados['gamma_ang_deg']:.2f} °")
-    print(f"   Ángulo de fase equivalente (coef. de fase) = {resultados['fase_coef_deg']:.2f} °")
+    lineas.append("3) Coeficiente de reflexión en la carga:")
+    lineas.append(f"   Γ_L = (z_N - 1) / (z_N + 1) = {gamma_L.real:.2f} + j{gamma_L.imag:.2f}")
+    lineas.append(f"   |Γ_L| = {resultados['gamma_mag']:.2f} (adimensional)")
+    lineas.append(f"   ∠Γ_L = {resultados['gamma_ang_deg']:.2f} °")
+    lineas.append(f"   Ángulo de fase equivalente (coef. de fase) = {resultados['fase_coef_deg']:.2f} °")
 
-    print("4) Parámetros derivados basados en |Γ_L|:")
-    print(f"   ROE (SWR) = {resultados['SWR']:.2f} (adimensional)")
-    print(f"   ROE en dB (dBS) = {resultados['dBS']:.2f} dB")
-    print(f"   Atenuación equivalente = {resultados['ATTEN_dB']:.2f} dB")
-    print(f"   Coef. pérdida por ROE = {resultados['SW_LOSS_COEFF']:.2f} (adimensional)")
-    print(f"   Pérdida de retorno = {resultados['RL_dB']:.2f} dB")
-    print(f"   Coef. reflexión potencia |Γ|² = {resultados['Gamma_P']:.2f} (adimensional)")
-    print(f"   Pérdida por desajuste = {resultados['RFL_LOSS_dB']:.2f} dB")
-    print(f"   Coef. reflexión |Γ| = {resultados['Gamma_E']:.2f} (adimensional)")
+    lineas.append("4) Parámetros derivados basados en |Γ_L|:")
+    lineas.append(f"   ROE (SWR) = {resultados['SWR']:.2f} (adimensional)")
+    lineas.append(f"   ROE en dB (dBS) = {resultados['dBS']:.2f} dB")
+    lineas.append(f"   Atenuación equivalente = {resultados['ATTEN_dB']:.2f} dB")
+    lineas.append(f"   Coef. pérdida por ROE = {resultados['SW_LOSS_COEFF']:.2f} (adimensional)")
+    lineas.append(f"   Pérdida de retorno = {resultados['RL_dB']:.2f} dB")
+    lineas.append(f"   Coef. reflexión potencia |Γ|² = {resultados['Gamma_P']:.2f} (adimensional)")
+    lineas.append(f"   Pérdida por desajuste = {resultados['RFL_LOSS_dB']:.2f} dB")
+    lineas.append(f"   Coef. reflexión |Γ| = {resultados['Gamma_E']:.2f} (adimensional)")
 
-    print("5) Parámetros de transmisión:")
-    print(f"   Potencia transmitida normalizada = {resultados['P_trans']:.2f} (adimensional)")
-    print(f"   Coef. transmisión de potencia = {resultados['T_P']:.2f} (adimensional)")
-    print(f"   |Coef. transmisión de tensión| = {resultados['T_E_mag']:.2f} (adimensional)")
-    print(f"   ∠(1 + Γ_L) (ángulo del coef. de transmisión) = {resultados['tau_ang_deg']:.2f} °")
+    lineas.append("5) Parámetros de transmisión:")
+    lineas.append(f"   Potencia transmitida normalizada = {resultados['P_trans']:.2f} (adimensional)")
+    lineas.append(f"   Coef. transmisión de potencia = {resultados['T_P']:.2f} (adimensional)")
+    lineas.append(f"   |Coef. transmisión de tensión| = {resultados['T_E_mag']:.2f} (adimensional)")
+    lineas.append(f"   ∠(1 + Γ_L) (ángulo del coef. de transmisión) = {resultados['tau_ang_deg']:.2f} °")
 
     perfiles = resultados.get("perfiles_linea", [])
     if perfiles:
-        print("6) Desplazamientos a lo largo de la línea:")
+        lineas.append("6) Desplazamientos a lo largo de la línea:")
         for perfil in perfiles:
             sentido = perfil["direccion"]
-            print(
+            lineas.append(
                 f"   ℓ = {perfil['longitud']:+.2f} λ ({sentido}), rotación = {perfil['rotacion_deg']:+.2f} °"
             )
             gamma_d = perfil["gamma"]
             tau_d = perfil["tau"]
-            print(
+            lineas.append(
                 f"     Γ(ℓ) = {gamma_d.real:.2f} + j{gamma_d.imag:.2f}; ∠Γ(ℓ) = {perfil['gamma_ang_deg']:.2f} °"
             )
-            print(
+            lineas.append(
                 f"     τ(ℓ) = {tau_d.real:.2f} + j{tau_d.imag:.2f}; ∠τ(ℓ) = {perfil['tau_ang_deg']:.2f} °"
             )
-    print("=== Fin del resumen ===")
+    lineas.append("=== Fin del resumen ===")
+
+    texto = "\n".join(lineas)
+    print(texto)
+    return texto
 
 # Función para determinar la orientación del texto circular
 def _ajustar_rotacion_tangencial(angulo_deg: float) -> float:
@@ -373,12 +387,13 @@ def _dibujar_escala_angulos(ax):
             )
     # Etiquetas generales
     ax.text(
-        0.0,
-        1.48,
+        0.5,
+        1.06,
         "Ángulo del coeficiente de reflexión (grados)\nÁngulo del coeficiente de transmisión (grados)",
         fontsize=7,
         ha='center',
-        va='bottom'
+        va='bottom',
+        transform=ax.transAxes
     )
 
 # Función para dibujar la escala de longitudes de onda 
@@ -440,12 +455,13 @@ def _dibujar_escala_longitudes(ax):
             )
 
     ax.text(
-        0.0,
-        1.34,
+        0.5,
+        1.015,
         "Longitudes de onda hacia el generador →",
         fontsize=7,
         ha='center',
-        va='bottom'
+        va='bottom',
+        transform=ax.transAxes
     )
     ax.text(
         0.0,
@@ -483,25 +499,24 @@ def _dibujar_anillos_exteriores(ax):
         va='center',
     )
 
-    # === TEXTO CIRCULAR A LO LARGO DE LOS ANILLOS (NUEVO) ===
-    # Ejemplo: una etiqueta en arco superior e inferior.
-    texto_en_arco(
-        ax,
-        "ANGULO DE REFLEXION",
-        radio=1.06,
-        angulo_centro_deg=90.0,
-        ancho_grados=160.0,
+    ax.text(
+        0.5,
+        1.03,
+        "Ángulo de reflexión",
         fontsize=7,
-        color="black",
+        ha='center',
+        va='bottom',
+        color='black',
+        transform=ax.transAxes
     )
-    texto_en_arco(
-        ax,
-        "LONGITUDES DE ONDA",
-        radio=1.32,
-        angulo_centro_deg=-90.0,
-        ancho_grados=160.0,
+    ax.text(
+        0.0,
+        -1.48,
+        "Longitudes de onda",
         fontsize=7,
-        color="dimgray",
+        ha='center',
+        va='top',
+        color='dimgray'
     )
 
 # Función para dibujar la carta de Smith completa
@@ -515,6 +530,8 @@ def dibujar_carta_smith(ax):
 
     theta = np.linspace(0, 2*np.pi, 400)
     ax.plot(np.cos(theta), np.sin(theta), color='black', lw=1)
+    ax.plot(0.0, 0.0, marker='o', color='black', markersize=4, zorder=5)
+    ax.text(0.04, 0.04, "1 + j0", fontsize=7, ha='left', va='bottom', color='black')
 
     resistencias = [0.1, 0.2, 0.3, 0.5, 1, 2, 5, 10]
     for r in resistencias:
@@ -538,9 +555,29 @@ def dibujar_carta_smith(ax):
 
     ax.set_xlabel(r'$\Re\{\Gamma\}$', labelpad=16)
     ax.set_ylabel(r'$\Im\{\Gamma\}$', labelpad=16)
-    ax.set_title("Carta de Smith normalizada", pad=28)
+    # ax.set_title("Carta de Smith normalizada", pad=28)
     ax.set_xticks([])
     ax.set_yticks([])
+    # Marcadores en el eje real para identificar la escala puramente resistiva/admitiva
+    valores_r = [0.0] + resistencias + [np.inf]
+    for r in valores_r:
+        if np.isinf(r):
+            x_pos = 1.0
+            etiqueta_r = "∞"
+            etiqueta_g = "0"
+        else:
+            x_pos = (r - 1.0) / (r + 1.0)
+            etiqueta_r = f"{r:g}"
+            if r == 0.0:
+                etiqueta_g = "∞"
+            else:
+                etiqueta_g = f"{(1.0 / r):g}"
+        if -1.05 <= x_pos <= 1.05:
+            ax.plot([x_pos, x_pos], [0.0, -0.025], color='gray', lw=0.45, zorder=4)
+            ax.text(x_pos, -0.06, etiqueta_r, ha='center', va='top', fontsize=6, color='black')
+            ax.text(x_pos, 0.06, etiqueta_g, ha='center', va='bottom', fontsize=6, color='dimgray')
+    #ax.text(0.5, -0.10, "Resistance Component (R/Z0)", transform=ax.transAxes, ha='center', va='top', fontsize=7)
+    #ax.text(0.5, 1.08, "Conductance Component (G/Y0)", transform=ax.transAxes, ha='center', va='bottom', fontsize=7, color='dimgray')
     # Dibujar elementos adicionales 
     _dibujar_anillos_exteriores(ax)
     _dibujar_escala_angulos(ax)
@@ -564,12 +601,14 @@ def _calcular_gamma_desde_RFL_LOSS(L_dB):
 
 # Función para calcular gamma desde atenuación en dB 
 def _calcular_gamma_desde_ATTEN(A_dB):
-    return 10.0 ** (-A_dB / 10.0)
+    return 10.0 ** (-A_dB / 20.0)
 
 # Función para calcular gamma desde coeficiente de pérdida por ROE 
 def _calcular_gamma_desde_SW_LOSS(F):
     F = np.asarray(F)
-    S = F + np.sqrt(F**2 - 1.0)
+    # Clamp values to keep the square root argument non-negative
+    F_clamped = np.maximum(F, 1.0)
+    S = F_clamped + np.sqrt(F_clamped**2 - 1.0)
     return _calcular_gamma_desde_S(S)
 
 # Función para dibujar las regletas inferiores 
@@ -637,7 +676,7 @@ def dibujar_regletas(ax, resultados):
     ]
     # Determinar número de regletas
     num_reglas = len(regletas)
-    # Configurar ejes 
+    # Configurar ejes  
     ax.set_xlim(-0.35, 1.35)
     ax.set_ylim(-0.7, num_reglas + 0.7)
     ax.axis('off')
@@ -678,22 +717,76 @@ def dibujar_regletas(ax, resultados):
             ax.text(x_text, y, reg["etiqueta"], ha='left', va='center', fontsize=7)
             ax.plot([1.0, x_text - 0.02], [y, y], color='gray', lw=0.5)
 
+    # ==== BLOQUE NUEVO: título + flechas laterales + texto centrado ====
+
+    # Título general (tipo "RADIALLY SCALED PARAMETERS")
     ax.text(
         0.5,
-        1.08,
-        "Parámetros escalados radialmente",
+        1.10,
+        "PARÁMETROS ESCALADOS RADIALMENTE",
         ha='center',
         va='bottom',
         fontsize=9,
+        fontweight='bold',
         transform=ax.transAxes,
     )
+
+    # Texto "HACIA LA CARGA" a la izquierda
+    ax.text(
+        0.00,
+        1.00,
+        "HACIA LA CARGA",
+        ha='left',
+        va='bottom',
+        fontsize=8,
+        transform=ax.transAxes,
+    )
+
+    # Flecha gruesa hacia la derecha (carga)
+    ax.annotate(
+        "",
+        xy=(0.30, 1.025),      # punta de la flecha (derecha)
+        xytext=(0.06, 1.025),  # origen (izquierda)
+        xycoords=ax.transAxes,
+        textcoords=ax.transAxes,
+        arrowprops=dict(
+            arrowstyle="->",
+            lw=1.4,
+        ),
+    )
+
+    # Texto "HACIA EL GENERADOR" a la derecha
+    ax.text(
+        0.95, # 
+        1.00, # 
+        "HACIA EL GENERADOR",
+        ha='right',
+        va='bottom',
+        fontsize=8,
+        transform=ax.transAxes,
+    )
+
+    # Flecha gruesa hacia la izquierda (generador)
+    ax.annotate(
+        "",
+        xy=(0.94, 1.025),      # punta (izquierda)
+        xytext=(0.70, 1.025),  # origen (derecha)
+        xycoords=ax.transAxes,
+        textcoords=ax.transAxes,
+        arrowprops=dict(
+            arrowstyle="<-",
+            lw=1.4,
+        ),
+    )
+
+    # Texto centrado bajo las flechas, como referencia adicional
     ax.text(
         0.5,
-        1.02,
+        0.98,
         "Hacia la carga →   ← Hacia el generador",
         ha='center',
-        va='bottom',
-        fontsize=9,
+        va='top',
+        fontsize=8,
         transform=ax.transAxes,
     )
 
@@ -705,15 +798,15 @@ def crear_grafica_completa(Z0, ZL, desplazamientos: Optional[List[float]] = None
     resultados = calcular_reflexion_y_parametros(Z0, ZL)
     perfiles_linea = _calcular_perfiles_desplazamiento(resultados["gamma_L"], desplazamientos)
     resultados["perfiles_linea"] = perfiles_linea
-    imprimir_procedimiento(Z0, ZL, resultados)
+    procedimiento_texto = imprimir_procedimiento(Z0, ZL, resultados)
 
     gamma_L = resultados["gamma_L"]
     gamma_mag = resultados["gamma_mag"]
 
-    fig = plt.figure(figsize=(9, 12), constrained_layout=True)
+    fig = plt.figure(figsize=(9, 11), constrained_layout=True)
     fig.suptitle(
-        "Laboratorio Integrador 2025-2 - LTT93\nAlumno: David González Herrera (Carné 19221022)",
-        fontsize=12,
+        "Laboratorio Integrador 2025-2 - LTT93",
+        fontsize=10,
     )
     gestor_ventana = getattr(fig.canvas, "manager", None)
     if gestor_ventana is not None:
@@ -723,11 +816,10 @@ def crear_grafica_completa(Z0, ZL, desplazamientos: Optional[List[float]] = None
             )
         except Exception:
             pass
-    gs = fig.add_gridspec(3, 1, height_ratios=[4.0, 1.6, 1.0])
+    gs = fig.add_gridspec(2, 1, height_ratios=[5.0, 1.6])
 
     ax_smith = fig.add_subplot(gs[0, 0])
     ax_regletas = fig.add_subplot(gs[1, 0])
-    ax_leyenda = fig.add_subplot(gs[2, 0])
 
     dibujar_carta_smith(ax_smith)
     ax_smith.plot(gamma_L.real, gamma_L.imag, 'ro', label=r'$\Gamma_L$')
@@ -744,12 +836,11 @@ def crear_grafica_completa(Z0, ZL, desplazamientos: Optional[List[float]] = None
 
     dibujar_regletas(ax_regletas, resultados)
 
-    ax_leyenda.axis('off')
     texto_leyenda = (
         "Leyenda de las regletas (anillos inferiores):\n"
         "• ROE (Relación de onda estacionaria): con S = (1 + |Γ|)/(1 - |Γ|).\n"
         "• ROE en dB (dBS): la misma ROE expresada como dBS = 20·log10(S).\n"
-        "• Atenuación (dB): atenuador equivalente frente a reflexión total; |Γ| ≈ 10^(-A/10).\n"
+        "• Atenuación (dB): atenuador equivalente frente a reflexión total; |Γ| ≈ 10^(-A/20).\n"
         "• Coef. pérdida por ROE: factor clásico F ≈ (1 + S²)/(2·S).\n"
         "• Pérdida de retorno (dB): RL = -20·log10(|Γ|), potencia reflejada hacia el generador.\n"
         "• Coef. reflexión potencia |Γ|²: razón de potencias reflejada/incidente.\n"
@@ -757,7 +848,20 @@ def crear_grafica_completa(Z0, ZL, desplazamientos: Optional[List[float]] = None
         "• Coef. reflexión |Γ|: módulo del coeficiente de reflexión de tensión o corriente.\n"
         "• Círculo de impedancia: borde |Γ| = 1 que delimita la carta y define el mapa de impedancias normalizadas."
     )
-    ax_leyenda.text(0.01, 0.98, texto_leyenda, ha='left', va='top', fontsize=8, wrap=True)
+
+    fig_procedimiento = plt.figure(figsize=(7, 8), constrained_layout=True)
+    fig_procedimiento.suptitle("Procedimiento paso a paso", fontsize=11)
+    ax_proc = fig_procedimiento.add_subplot(1, 1, 1)
+    ax_proc.axis('off')
+    ax_proc.text(
+        0.01,
+        0.98,
+        procedimiento_texto + "\n\n" + texto_leyenda,
+        ha='left',
+        va='top',
+        fontsize=9,
+        wrap=True,
+    )
 
     anot = ax_smith.annotate(
         "", xy=(0, 0), xytext=(15, 15),
