@@ -731,62 +731,14 @@ def dibujar_regletas(ax, resultados):
         transform=ax.transAxes,
     )
 
-    # Texto "HACIA LA CARGA" a la izquierda
-    ax.text(
-        0.00,
-        1.00,
-        "HACIA LA CARGA",
-        ha='left',
-        va='bottom',
-        fontsize=8,
-        transform=ax.transAxes,
-    )
-
-    # Flecha gruesa hacia la derecha (carga)
-    ax.annotate(
-        "",
-        xy=(0.30, 1.025),      # punta de la flecha (derecha)
-        xytext=(0.06, 1.025),  # origen (izquierda)
-        xycoords=ax.transAxes,
-        textcoords=ax.transAxes,
-        arrowprops=dict(
-            arrowstyle="->",
-            lw=1.4,
-        ),
-    )
-
-    # Texto "HACIA EL GENERADOR" a la derecha
-    ax.text(
-        0.95, # 
-        1.00, # 
-        "HACIA EL GENERADOR",
-        ha='right',
-        va='bottom',
-        fontsize=8,
-        transform=ax.transAxes,
-    )
-
-    # Flecha gruesa hacia la izquierda (generador)
-    ax.annotate(
-        "",
-        xy=(0.94, 1.025),      # punta (izquierda)
-        xytext=(0.70, 1.025),  # origen (derecha)
-        xycoords=ax.transAxes,
-        textcoords=ax.transAxes,
-        arrowprops=dict(
-            arrowstyle="<-",
-            lw=1.4,
-        ),
-    )
-
     # Texto centrado bajo las flechas, como referencia adicional
     ax.text(
         0.5,
-        0.98,
+        1,
         "Hacia la carga →   ← Hacia el generador",
         ha='center',
         va='top',
-        fontsize=8,
+        fontsize=9,
         transform=ax.transAxes,
     )
 
@@ -799,10 +751,10 @@ def crear_grafica_completa(Z0, ZL, desplazamientos: Optional[List[float]] = None
     perfiles_linea = _calcular_perfiles_desplazamiento(resultados["gamma_L"], desplazamientos)
     resultados["perfiles_linea"] = perfiles_linea
     procedimiento_texto = imprimir_procedimiento(Z0, ZL, resultados)
-
+    # Extraer valores clave para graficar
     gamma_L = resultados["gamma_L"]
     gamma_mag = resultados["gamma_mag"]
-
+    # Crear figura y ejes 
     fig = plt.figure(figsize=(9, 11), constrained_layout=True)
     fig.suptitle(
         "Laboratorio Integrador 2025-2 - LTT93",
@@ -848,7 +800,7 @@ def crear_grafica_completa(Z0, ZL, desplazamientos: Optional[List[float]] = None
         "• Coef. reflexión |Γ|: módulo del coeficiente de reflexión de tensión o corriente.\n"
         "• Círculo de impedancia: borde |Γ| = 1 que delimita la carta y define el mapa de impedancias normalizadas."
     )
-
+    # Crear figura separada para el procedimiento paso a paso
     fig_procedimiento = plt.figure(figsize=(7, 8), constrained_layout=True)
     fig_procedimiento.suptitle("Procedimiento paso a paso", fontsize=11)
     ax_proc = fig_procedimiento.add_subplot(1, 1, 1)
