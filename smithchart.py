@@ -27,7 +27,7 @@ from matplotlib.transforms import Affine2D         # Para transformaciones
 # Constantes de diseño de la carta
 RADIO_CARTA = 1.0
 ESCALA_ANGULO_INTERNA = 1.06
-ESCALA_ANGULO_EXTERNA = 1.11
+ESCALA_ANGULO_EXTERNA = 1.24
 ESCALA_LONGITUD_GENERADOR = 1.18
 ESCALA_LONGITUD_CARGA = 1.24
 ESCALA_PARAMETROS = 1.34
@@ -111,6 +111,8 @@ def calcular_reflexion_y_parametros(Z0, ZL) -> dict[str, Any]:
     """
     z_norm = ZL / Z0
     gamma_L = (z_norm - 1) / (z_norm + 1)
+    gamma_num = ZL - Z0
+    gamma_den = ZL + Z0
 
     gamma_mag = abs(gamma_L)
     gamma_ang_deg = _envolver_angulo_deg(np.degrees(np.angle(gamma_L)))
@@ -146,6 +148,11 @@ def calcular_reflexion_y_parametros(Z0, ZL) -> dict[str, Any]:
     tau_ang_deg = _envolver_angulo_deg(np.degrees(np.angle(tau_L)))
     T_E_mag = abs(tau_L)
     fase_coef_deg = gamma_ang_deg
+    denom_gamma = 1 - gamma_L
+    if np.isclose(abs(denom_gamma), 0.0, atol=1e-12):
+        Z_in_0 = complex(np.inf)
+    else:
+        Z_in_0 = Z0 * (1 + gamma_L) / denom_gamma
     # Coeficiente de transmisión de tensión
     resultados: dict[str, Any] = dict(
         z_norm=z_norm,                   # Impedancia normalizada
@@ -167,6 +174,9 @@ def calcular_reflexion_y_parametros(Z0, ZL) -> dict[str, Any]:
         tau_L=tau_L,                     # Coeficiente de transmisión de tensión
         tau_ang_deg=tau_ang_deg,         # Ángulo del coeficiente de transmisión
         T_E_mag=T_E_mag,                 # Magnitud del coeficiente de transmisión de tensión
+        Z_in_0=Z_in_0,                   # Impedancia vista en la carga (equivale a ZL)
+        gamma_num=gamma_num,             # Numerador (ZL - Z0)
+        gamma_den=gamma_den,             # Denominador (ZL + Z0)
         perfiles_linea=[],               # Perfiles a lo largo de la línea (rellenado después)
     )
     return resultados
@@ -187,7 +197,18 @@ def imprimir_procedimiento(Z0, ZL, resultados):
 
     gamma_L = resultados["gamma_L"]
     lineas.append("3) Coeficiente de reflexión en la carga:")
-    lineas.append(f"   Γ_L = (z_N - 1) / (z_N + 1) = {gamma_L.real:.2f} + j{gamma_L.imag:.2f}")
+    gamma_num = resultados.get("gamma_num")
+    gamma_den = resultados.get("gamma_den")
+    if gamma_num is not None and gamma_den is not None:
+        lineas.append(
+            f"   Numerador (ZL − Z0) = {gamma_num.real:.2f} + j{gamma_num.imag:.2f} Ω"
+        )
+        lineas.append(
+            f"   Denominador (ZL + Z0) = {gamma_den.real:.2f} + j{gamma_den.imag:.2f} Ω"
+        )
+    lineas.append(
+        f"   Γ_L = (ZL − Z0) / (ZL + Z0) = {gamma_L.real:.2f} + j{gamma_L.imag:.2f}"
+    )
     lineas.append(f"   |Γ_L| = {resultados['gamma_mag']:.2f} (adimensional)")
     lineas.append(f"   ∠Γ_L = {resultados['gamma_ang_deg']:.2f} °")
     lineas.append(f"   Ángulo de fase equivalente (coef. de fase) = {resultados['fase_coef_deg']:.2f} °")
@@ -207,6 +228,14 @@ def imprimir_procedimiento(Z0, ZL, resultados):
     lineas.append(f"   Coef. transmisión de potencia = {resultados['T_P']:.2f} (adimensional)")
     lineas.append(f"   |Coef. transmisión de tensión| = {resultados['T_E_mag']:.2f} (adimensional)")
     lineas.append(f"   ∠(1 + Γ_L) (ángulo del coef. de transmisión) = {resultados['tau_ang_deg']:.2f} °")
+    Zi0 = resultados.get("Z_in_0")
+    if Zi0 is not None:
+        if np.isfinite(Zi0.real) and np.isfinite(Zi0.imag):
+            lineas.append(
+                f"   Z_in(0) = {Zi0.real:.2f} + j{Zi0.imag:.2f} Ω (impedancia vista en la carga)"
+            )
+        else:
+            lineas.append("   Z_in(0) = ∞ (impedancia vista en la carga)")
 
     perfiles = resultados.get("perfiles_linea", [])
     if perfiles:
@@ -224,6 +253,17 @@ def imprimir_procedimiento(Z0, ZL, resultados):
             lineas.append(
                 f"     τ(ℓ) = {tau_d.real:.2f} + j{tau_d.imag:.2f}; ∠τ(ℓ) = {perfil['tau_ang_deg']:.2f} °"
             )
+            Zi = perfil.get("Zi")
+            if Zi is not None:
+                if np.isfinite(Zi.real) and np.isfinite(Zi.imag):
+                    lineas.append(
+                        f"     Z_in(ℓ) = {Zi.real:.2f} + j{Zi.imag:.2f} Ω (impedancia vista)"
+                    )
+                    lineas.append(
+                        f"     R_in(ℓ) = {Zi.real:.2f} Ω, X_in(ℓ) = {Zi.imag:.2f} Ω"
+                    )
+                else:
+                    lineas.append("     Z_in(ℓ) = ∞ (impedancia vista)")
     lineas.append("=== Fin del resumen ===")
 
     texto = "\n".join(lineas)
@@ -312,13 +352,22 @@ def texto_en_arco(
         )
 
 # Función para calcular perfiles a lo largo de la línea 
-def _calcular_perfiles_desplazamiento(gamma_L: complex, desplazamientos: List[float]):
-    """Genera los perfiles de Γ y 1+Γ al movernos a lo largo de la línea."""
+def _calcular_perfiles_desplazamiento(
+    gamma_L: complex,
+    desplazamientos: List[float],
+    Z0: float,
+):
+    """Genera los perfiles de Γ, τ y la impedancia vista Z_in a lo largo de la línea."""
     perfiles = []
     for desplazamiento in desplazamientos:
         rot_rad = -4.0 * np.pi * desplazamiento
         gamma_d = gamma_L * np.exp(1j * rot_rad)
         tau_d = 1 + gamma_d
+        denom = 1 - gamma_d
+        if np.isclose(abs(denom), 0.0, atol=1e-12):
+            Zi = complex(np.inf)
+        else:
+            Zi = Z0 * (1 + gamma_d) / denom
         perfiles.append(dict(
             longitud=desplazamiento,
             direccion=(
@@ -331,6 +380,7 @@ def _calcular_perfiles_desplazamiento(gamma_L: complex, desplazamientos: List[fl
             gamma_ang_deg=_envolver_angulo_deg(np.degrees(np.angle(gamma_d))),
             tau=tau_d,
             tau_ang_deg=_envolver_angulo_deg(np.degrees(np.angle(tau_d))),
+            Zi=Zi,
         ))
     return perfiles
 
@@ -342,7 +392,7 @@ def _dibujar_escala_angulos(ax):
     for ang_deg in range(0, 360, minor_step):
         rad = np.radians(ang_deg)
         r_inner = 1.0
-        r_outer = 1.03 if ang_deg % major_step else 1.06
+        r_outer = 1.03 if ang_deg % major_step else ESCALA_ANGULO_INTERNA
         ax.plot(
             [r_inner * np.cos(rad), r_outer * np.cos(rad)],
             [r_inner * np.sin(rad), r_outer * np.sin(rad)],
@@ -350,7 +400,7 @@ def _dibujar_escala_angulos(ax):
             lw=0.4,
             zorder=2,
         )
-    # Etiquetas principales 
+
     for ang_deg in range(0, 360, major_step):
         rad = np.radians(ang_deg)
         cos_v = np.cos(rad)
@@ -385,17 +435,167 @@ def _dibujar_escala_angulos(ax):
                 rotation_mode='anchor',
                 color='dimgray',
             )
-    # Etiquetas generales
-    ax.text(
-        0.5,
-        1.06,
-        "Ángulo del coeficiente de reflexión (grados)\nÁngulo del coeficiente de transmisión (grados)",
-        fontsize=7,
-        ha='center',
-        va='bottom',
-        transform=ax.transAxes
+# Función para marcar los ángulos de reflexión y transmisión
+def _marcar_angulos_coeficientes(
+    ax,
+    angulo_reflexion_deg: Optional[float],
+    angulo_transmision_deg: Optional[float],
+) -> List[dict[str, Any]]:
+    """Marca los ángulos de reflexión y transmisión con puntos, texto numérico y devuelve su metadata."""
+
+    marcadores: List[dict[str, Any]] = []
+    # Función interna para dibujar un marcador
+    def _dibujar_marcador(
+        angulo_deg: Optional[float],
+        radio: float,
+        color: str,
+        offset: float,
+        nombre: str,
+    ) -> None:
+        if angulo_deg is None or not np.isfinite(angulo_deg):
+            return
+        # Dibujar el punto y la etiqueta
+        ang_rad = np.radians(angulo_deg)
+        x = radio * np.cos(ang_rad)
+        y = radio * np.sin(ang_rad)
+        ax.plot(
+            x,
+            y,
+            marker='o',
+            markersize=8,
+            markerfacecolor=color,
+            markeredgecolor='white',
+            markeredgewidth=1.2,
+            linestyle='None',
+            zorder=6,
+        )
+        # Etiqueta numérica
+        etiqueta = f"{angulo_deg:.1f}°"
+        radio_texto = radio + offset
+        x_txt = radio_texto * np.cos(ang_rad)
+        y_txt = radio_texto * np.sin(ang_rad)
+        ha, va, _ = _orientacion_texto_circular(x_txt, y_txt)
+        ax.text(
+            x_txt,
+            y_txt,
+            etiqueta,
+            fontsize=7,
+            color=color,
+            ha=ha,
+            va=va,
+            zorder=6,
+        )
+        # Guardar metadata del marcador
+        marcadores.append(
+            dict(
+                nombre=nombre,
+                angulo_deg=angulo_deg,
+                posicion=(x, y),
+                color=color,
+                radio_det=0.05,
+            )
+        )
+    # Dibujar los marcadores para ángulo de reflexión y transmisión
+    _dibujar_marcador(
+        angulo_reflexion_deg,
+        ESCALA_ANGULO_INTERNA,
+        'tab:green',
+        0.08,
+        "Ángulo de reflexión",
+    )
+    # Dibujar el marcador para ángulo de transmisión
+    _dibujar_marcador(
+        angulo_transmision_deg,
+        ESCALA_ANGULO_EXTERNA,
+        'tab:blue',
+        0.05,
+        "Ángulo de transmisión",
     )
 
+    return marcadores
+
+# Función para dibujar longitudes eléctricas
+def _dibujar_longitudes_electricas(
+    ax,
+    perfiles_linea: List[dict[str, Any]],
+) -> List[dict[str, Any]]:
+    """Dibuja los puntos asociados a las longitudes eléctricas solicitadas."""
+
+    marcadores: List[dict[str, Any]] = []
+
+    if not perfiles_linea:
+        return marcadores
+
+    for idx, perfil in enumerate(perfiles_linea, start=1):
+        gamma_d = perfil.get("gamma")
+        if gamma_d is None:
+            continue
+
+        if not isinstance(gamma_d, complex):
+            try:
+                gamma_d = complex(gamma_d)
+            except Exception:
+                continue
+
+        x = gamma_d.real
+        y = gamma_d.imag
+        ax.plot(
+            x,
+            y,
+            marker='s',
+            markersize=7,
+            markerfacecolor='purple',
+            markeredgecolor='white',
+            markeredgewidth=1.1,
+            linestyle='None',
+            zorder=6,
+        )
+
+        sentido = perfil.get("direccion", "")
+        Zi = perfil.get("Zi")
+        if isinstance(Zi, complex) and np.isfinite(Zi.real) and np.isfinite(Zi.imag):
+            etiqueta = (
+                f"ℓ{idx} = {perfil['longitud']:+.2f} λ\n"
+                f"Z_in = {Zi.real:.2f} + j{Zi.imag:.2f} Ω"
+            )
+        else:
+            etiqueta = f"ℓ{idx} = {perfil['longitud']:+.2f} λ\nZ_in = ∞"
+
+        norma = np.hypot(x, y)
+        if norma == 0:
+            norma = 1.0
+        desplazamiento = 0.05
+        x_txt = x + (x / norma) * desplazamiento
+        y_txt = y + (y / norma) * desplazamiento
+        ha, va, rot = _orientacion_texto_circular(x_txt, y_txt)
+        ax.text(
+            x_txt,
+            y_txt,
+            etiqueta,
+            ha=ha,
+            va=va,
+            fontsize=6,
+            color='purple',
+            rotation=rot,
+            rotation_mode='anchor',
+            zorder=6,
+        )
+
+        marcadores.append(
+            dict(
+                nombre=f"Longitud eléctrica #{idx}",
+                etiqueta=etiqueta,
+                posicion=(x, y),
+                posicion_texto=(x_txt, y_txt),
+                direccion=sentido,
+                angulo=perfil.get("gamma_ang_deg"),
+                longitud=perfil.get("longitud"),
+                Zi=Zi,
+                radio_det=0.05,
+            )
+        )
+
+    return marcadores
 # Función para dibujar la escala de longitudes de onda 
 def _dibujar_escala_longitudes(ax):
     """Añade las escala de longitudes de onda hacia generador y carga."""
@@ -608,7 +808,7 @@ def _calcular_gamma_desde_SW_LOSS(F):
     F = np.asarray(F)
     # Clamp values to keep the square root argument non-negative
     F_clamped = np.maximum(F, 1.0)
-    S = F_clamped + np.sqrt(F_clamped**2 - 1.0)
+    S = F_clamped + np.sqrt(np.square(F_clamped) - 1.0)
     return _calcular_gamma_desde_S(S)
 
 # Función para dibujar las regletas inferiores 
@@ -748,7 +948,7 @@ def crear_grafica_completa(Z0, ZL, desplazamientos: Optional[List[float]] = None
     if desplazamientos is None:
         desplazamientos = []
     resultados = calcular_reflexion_y_parametros(Z0, ZL)
-    perfiles_linea = _calcular_perfiles_desplazamiento(resultados["gamma_L"], desplazamientos)
+    perfiles_linea = _calcular_perfiles_desplazamiento(resultados["gamma_L"], desplazamientos, Z0)
     resultados["perfiles_linea"] = perfiles_linea
     procedimiento_texto = imprimir_procedimiento(Z0, ZL, resultados)
     # Extraer valores clave para graficar
@@ -784,6 +984,16 @@ def crear_grafica_completa(Z0, ZL, desplazamientos: Optional[List[float]] = None
         lw=1.0,
         label=r'|$\Gamma$| constante'
     )
+    marcadores_angulos = _marcar_angulos_coeficientes(
+        ax_smith,
+        resultados['gamma_ang_deg'],
+        resultados['tau_ang_deg'],
+    )
+    marcadores_longitudes = _dibujar_longitudes_electricas(
+        ax_smith,
+        perfiles_linea,
+    )
+    marcadores_interactivos = marcadores_angulos + marcadores_longitudes
     ax_smith.legend(loc='upper left', bbox_to_anchor=(1.15, 1.15), fontsize=8, frameon=False)
 
     dibujar_regletas(ax_regletas, resultados)
@@ -865,10 +1075,13 @@ def crear_grafica_completa(Z0, ZL, desplazamientos: Optional[List[float]] = None
             anot.set_position((px + delta_x * escala, py + delta_y * escala))
     
     # Configuración de la posición de la anotación según el eje
-    def configurar_anotacion(eje_destino):
+    def configurar_anotacion(eje_destino, base_point: Optional[Tuple[float, float]] = None):
         if eje_destino is ax_smith:
-            dx = 25 if gamma_L.real <= 0 else -120
-            dy = 30 if gamma_L.imag <= 0 else -90
+            if base_point is None:
+                base_point = (gamma_L.real, gamma_L.imag)
+            x_ref, y_ref = base_point
+            dx = 25 if x_ref <= 0 else -120
+            dy = 30 if y_ref <= 0 else -90
             ha = 'left' if dx >= 0 else 'right'
             va = 'bottom' if dy >= 0 else 'top'
         else:
@@ -883,28 +1096,37 @@ def crear_grafica_completa(Z0, ZL, desplazamientos: Optional[List[float]] = None
     # Formato base del texto de la anotación 
     def formato_valores_base():
         z = resultados["z_norm"]
-        return (
-            f"Z0 = {Z0:.2f} Ω\n"
-            f"ZL = {ZL.real:.2f} + j{ZL.imag:.2f} Ω\n"
-            f"z_N = {z.real:.2f} + j{z.imag:.2f} (Ad)\n"
-            f"Γ_L = {gamma_L.real:.2f} + j{gamma_L.imag:.2f}\n"
-            f"|Γ_L| = {resultados['gamma_mag']:.2f} (Ad)\n"
-            f"∠Γ_L = {resultados['gamma_ang_deg']:.2f}°\n"
-            f"Coef. de fase = {resultados['fase_coef_deg']:.2f}°\n"
-            f"ROE (SWR) = {resultados['SWR']:.2f} (Ad)\n"
-            f"ROE en dB (dBS) = {resultados['dBS']:.2f} dB\n"
-            f"Pérdida de retorno = {resultados['RL_dB']:.2f} dB\n"
-            f"|Γ| (coef. reflexión de tensión) = {resultados['Gamma_E']:.2f} (Ad)\n"
-            f"|Γ| en dB = {resultados['Gamma_E_dB']:.2f} dB\n"
-            f"Coef. reflexión potencia |Γ|² = {resultados['Gamma_P']:.2f} (Ad)\n"
-            f"Potencia transmitida (1−|Γ|²) = {resultados['P_trans']:.2f} (Ad)\n"
-            f"Pérdida por desajuste = {resultados['RFL_LOSS_dB']:.2f} dB\n"
-            f"Atenuación equivalente = {resultados['ATTEN_dB']:.2f} dB\n"
-            f"Coef. pérdida por ROE = {resultados['SW_LOSS_COEFF']:.2f} (Ad)\n"
-            f"Coef. transmisión de potencia = {resultados['T_P']:.2f} (Ad)\n"
-            f"|Coef. transmisión de tensión| = {resultados['T_E_mag']:.2f} (Ad)\n"
-            f"∠(1 + Γ_L) = {resultados['tau_ang_deg']:.2f}°"
-        )
+        lineas = [
+            f"Z0 = {Z0:.2f} Ω",
+            f"ZL = {ZL.real:.2f} + j{ZL.imag:.2f} Ω",
+            f"z_N = {z.real:.2f} + j{z.imag:.2f} (Ad)",
+            f"Γ_L = {gamma_L.real:.2f} + j{gamma_L.imag:.2f}",
+            f"|Γ_L| = {resultados['gamma_mag']:.2f} (Ad)",
+            f"∠Γ_L = {resultados['gamma_ang_deg']:.2f}°",
+        ]
+        Zi0 = resultados.get('Z_in_0')
+        if isinstance(Zi0, complex) and np.isfinite(Zi0.real) and np.isfinite(Zi0.imag):
+            lineas.append(f"Z_in(0) = {Zi0.real:.2f} + j{Zi0.imag:.2f} Ω")
+        else:
+            lineas.append("Z_in(0) = ∞")
+
+        lineas.extend([
+            f"Coef. de fase = {resultados['fase_coef_deg']:.2f}°",
+            f"ROE (SWR) = {resultados['SWR']:.2f} (Ad)",
+            f"ROE en dB (dBS) = {resultados['dBS']:.2f} dB",
+            f"Pérdida de retorno = {resultados['RL_dB']:.2f} dB",
+            f"|Γ| (coef. reflexión de tensión) = {resultados['Gamma_E']:.2f} (Ad)",
+            f"|Γ| en dB = {resultados['Gamma_E_dB']:.2f} dB",
+            f"Coef. reflexión potencia |Γ|² = {resultados['Gamma_P']:.2f} (Ad)",
+            f"Potencia transmitida (1−|Γ|²) = {resultados['P_trans']:.2f} (Ad)",
+            f"Pérdida por desajuste = {resultados['RFL_LOSS_dB']:.2f} dB",
+            f"Atenuación equivalente = {resultados['ATTEN_dB']:.2f} dB",
+            f"Coef. pérdida por ROE = {resultados['SW_LOSS_COEFF']:.2f} (Ad)",
+            f"Coef. transmisión de potencia = {resultados['T_P']:.2f} (Ad)",
+            f"|Coef. transmisión de tensión| = {resultados['T_E_mag']:.2f} (Ad)",
+            f"∠(1 + Γ_L) = {resultados['tau_ang_deg']:.2f}°",
+        ])
+        return "\n".join(lineas)
     # Formato completo con perfiles de línea
     def formato_valores_completo():
         base = formato_valores_base()
@@ -938,18 +1160,52 @@ def crear_grafica_completa(Z0, ZL, desplazamientos: Optional[List[float]] = None
 
         mostrar = False
         if event.inaxes is ax_smith and event.xdata is not None and event.ydata is not None:
-            dist = np.hypot(event.xdata - gamma_L.real, event.ydata - gamma_L.imag)
-            if dist < 0.06:
+            x_evt = event.xdata
+            y_evt = event.ydata
+            dist_gamma = np.hypot(x_evt - gamma_L.real, y_evt - gamma_L.imag)
+            if dist_gamma < 0.06:
                 anot.xy = (gamma_L.real, gamma_L.imag)
+                configurar_anotacion(ax_smith)
+                anot.set_text(formato_valores())
                 mostrar = True
+            else:
+                for marcador in marcadores_interactivos:
+                    x_m, y_m = marcador['posicion']
+                    radio_det = marcador.get('radio_det', 0.05)
+                    if np.hypot(x_evt - x_m, y_evt - y_m) < radio_det:
+                        anot.xy = (x_m, y_m)
+                        configurar_anotacion(ax_smith, base_point=(x_m, y_m))
+                        if marcador['nombre'].startswith("Longitud"):
+                            texto_lineas = [f"{marcador['nombre']}: {marcador['etiqueta']}"]
+                            direccion = marcador.get('direccion')
+                            if direccion:
+                                texto_lineas.append(f"Dirección: {direccion}")
+                            ang_local = marcador.get('angulo')
+                            if ang_local is not None and np.isfinite(ang_local):
+                                texto_lineas.append(f"∠Γ(ℓ) = {ang_local:.2f}°")
+                            Zi_loc = marcador.get('Zi')
+                            if Zi_loc is not None:
+                                if isinstance(Zi_loc, complex) and np.isfinite(Zi_loc.real) and np.isfinite(Zi_loc.imag):
+                                    texto_lineas.append(
+                                        f"Z_in(ℓ) = {Zi_loc.real:.2f} + j{Zi_loc.imag:.2f} Ω"
+                                    )
+                                else:
+                                    texto_lineas.append("Z_in(ℓ) = ∞")
+                            anot.set_text("\n".join(texto_lineas))
+                        else:
+                            anot.set_text(
+                                f"{marcador['nombre']}: {marcador['angulo_deg']:.2f}°"
+                            )
+                        mostrar = True
+                        break
         elif event.inaxes is ax_regletas and event.xdata is not None and event.ydata is not None:
             if abs(event.xdata - gamma_mag) < 0.02:
                 anot.xy = (gamma_mag, ax_regletas.get_ylim()[1])
+                configurar_anotacion(ax_regletas)
+                anot.set_text(formato_valores())
                 mostrar = True
 
         if mostrar:
-            configurar_anotacion(event.inaxes)
-            anot.set_text(formato_valores())
             anot.set_visible(True)
             ajustar_a_bordes(event.inaxes)
         else:
