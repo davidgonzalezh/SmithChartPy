@@ -79,7 +79,7 @@ def _parse_complejo_rectangular(texto: str) -> complex:
 
     return complex(real, imag)
 
-
+# Función para formatear números complejos en forma rectangular
 def _formatear_complejo_rectangular(valor: complex, decimales: int = 2) -> str:
     """Devuelve una representación 'a ± j b' con los decimales deseados."""
     valor_c = complex(valor)
@@ -300,7 +300,7 @@ def imprimir_procedimiento(Z0, ZL, resultados):
             )
         else:
             lineas.append("   Z_in(0) = ∞ (impedancia vista en la carga)")
-
+    
     perfiles = resultados.get("perfiles_linea", [])
     if perfiles:
         lineas.append("6) Desplazamientos a lo largo de la línea:")
