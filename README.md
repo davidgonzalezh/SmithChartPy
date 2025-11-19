@@ -183,4 +183,4 @@ La carta muestra el punto de reflexión, mientras que las regletas indican el va
 
 ## Créditos y uso
 
-Proyecto desarrollado por **David González Herrera (Carné 19221022)** para el **Laboratorio Integrador 2025-2** del curso **LTT93**, con asesoría del docente **Willer Ferney Montes Granada**. Uso con fines académicos y demostrativos.
+Proyecto desarrollado por **David González Herrera (Carné 19221022)** para el **Laboratorio Integrador 2025-2** del cursod e Líneas de Transmisión.
