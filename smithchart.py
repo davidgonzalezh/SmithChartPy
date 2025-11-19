@@ -16,15 +16,15 @@ y anotaciones por hover.
   en las cartas de Smith completas clásicas.
 """
 # Importaciones necesarias 
-import math
-import re
-from typing import Any, List, Optional, Tuple
+import math                                         # Librería matemática estándar
+import re                                           # Librería para expresiones regulares
+from typing import Any, List, Optional, Tuple       # Tipos para anotaciones de funciones
 
 import matplotlib.pyplot as plt                     # Librería para gráficos  
 import numpy as np                                  # Librería para cálculos numéricos   
 from matplotlib.backend_bases import RendererBase   # Base para renderizadores de Matplotlib
 from matplotlib.patches import Circle               # Para dibujar círculos
-from matplotlib.transforms import Affine2D         # Para transformaciones
+from matplotlib.transforms import Affine2D          # Para transformaciones
 
 # Constantes de diseño de la carta
 RADIO_CARTA = 1.0
@@ -39,14 +39,14 @@ def _envolver_angulo_deg(valor: float) -> float:
     """Normaliza un ángulo a (-180, 180] grados."""
     return ((valor + 180.0) % 360.0) - 180.0
 
-
+# Expresión regular para analizar números complejos en forma rectangular
 _COMPLEJO_RECT_RE = re.compile(
     r"^\s*(?P<real>[+-]?\d+(?:\.\d+)?(?:e[+-]?\d+)?)?"
     r"(?:(?P<imag_sign>[+-]?)j(?P<imag>\d*(?:\.\d+)?(?:e[+-]?\d+)?))?\s*$",
     re.IGNORECASE,
 )
 
-
+# Funciones para analizar y formatear números complejos en forma rectangular
 def _parse_complejo_rectangular(texto: str) -> complex:
     """Parses strings like '50', '50+j25', '-j10' into complex numbers."""
     s = texto.strip()
@@ -56,17 +56,17 @@ def _parse_complejo_rectangular(texto: str) -> complex:
     match = _COMPLEJO_RECT_RE.match(s)
     if not match:
         raise ValueError("Formato rectangular inválido.")
-
+    # Extraer partes
     real_str = match.group('real')
     imag_sign = match.group('imag_sign')
     imag_str = match.group('imag')
-
+    # Determinar si hay parte imaginaria
     tiene_imaginaria = 'j' in s or (imag_sign is not None and imag_str is not None)
     if real_str is None and not tiene_imaginaria:
         raise ValueError("Formato rectangular inválido.")
-
+    # Convertir a float
     real = float(real_str) if real_str else 0.0
-
+    # Parte imaginaria
     if tiene_imaginaria:
         signo = imag_sign if imag_sign else '+'
         if imag_str is None or imag_str == '':
@@ -532,6 +532,7 @@ def _dibujar_escala_angulos(ax):
                 rotation_mode='anchor',
                 color='dimgray',
             )
+
 # Función para marcar los ángulos de reflexión y transmisión
 def _marcar_angulos_coeficientes(
     ax,
@@ -713,6 +714,7 @@ def _dibujar_longitudes_electricas(
         )
 
     return marcadores
+
 # Función para dibujar la escala de longitudes de onda 
 def _dibujar_escala_longitudes(ax):
     """Añade las escala de longitudes de onda hacia generador y carga."""
@@ -1140,13 +1142,25 @@ def crear_grafica_completa(Z0, ZL, desplazamientos: Optional[List[float]] = None
         wrap=True,
     )
 
+    # === CUADRO DE HOVER: OPACO Y SIEMPRE ENCIMA ===
     anot = ax_smith.annotate(
-        "", xy=(0, 0), xytext=(18, 18),
+        "",
+        xy=(0, 0),
+        xytext=(18, 18),
         textcoords="offset points",
-        bbox=dict(boxstyle="round,pad=0.3", fc="#ffffff", ec="dimgray", lw=0.9),
-        arrowprops=dict(arrowstyle="->", color="dimgray", lw=0.8)
+        bbox=dict(boxstyle="round,pad=0.3", fc="#ffffff", ec="dimgray", lw=0.9, alpha=1.0),
+        arrowprops=dict(arrowstyle="->", color="dimgray", lw=0.8),
+        zorder=20,
     )
     anot.set_visible(False)
+    # Asegurar que el cuadro de hover tenga precedencia sobre cualquier contenido
+    anot.set_zorder(20)
+    if anot.arrow_patch is not None:
+        anot.arrow_patch.set_zorder(21)
+    bbox_patch = anot.get_bbox_patch()
+    if bbox_patch is not None:
+        bbox_patch.set_zorder(20)
+        bbox_patch.set_alpha(1.0)
 
     fig.canvas.draw()
     # Función para obtener el renderer actual del canvas 
@@ -1396,6 +1410,6 @@ def main():
     Z0, ZL, desplazamientos = leer_parametros_usuario()
     crear_grafica_completa(Z0, ZL, desplazamientos)
 
-
+# Ejecutar la función principal si se ejecuta el script directamente
 if __name__ == "__main__":
     main()
