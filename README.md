@@ -1,13 +1,69 @@
 # Carta de Smith Interactiva
 
-Herramienta interactiva escrita en Python para graficar la carta de Smith completa empleada en el curso LTT93 (Laboratorio Integrador 2025-2). El script genera la malla normalizada, calcula los parámetros clásicos de una línea de transmisión y muestra tanto los valores normalizados como los desnormalizados en consola y en la interfaz gráfica.
+Generador interactivo en Python que construye la carta de Smith completa empleada en el curso LTT93 (Laboratorio Integrador 2025-2). La aplicación traza la malla normalizada, calcula los parámetros clásicos de líneas de transmisión y ofrece un panel interactivo para inspeccionar cada resultado.
 
-## Características clave
+## Novedades destacadas 2025-2
 
-- **Captura guiada de impedancias**: durante la ejecución se ingresan `Z0`, la parte real `R_L` y la parte imaginaria `X_L` de `ZL`. No se aceptan cadenas rectangulares o polares; para `ZL = 201.3 − j50` se introduce `201.3` y `-50` cuando se solicitan las partes real e imaginaria.
-- **Resultados normalizados y desnormalizados**: se calculan `z_N`, `Γ_L`, `|Γ_L|`, `∠Γ_L`, el numerador `ZL − Z0`, el denominador `ZL + Z0`, y la impedancia vista `Z_in(ℓ)` junto con `R_in` y `X_in` para cada desplazamiento.
-- **Análisis de parámetros derivados**: ROE (SWR) lineal y en dB, pérdidas de retorno, pérdidas por desajuste, coeficiente de pérdida por ROE, potencia transmitida, coeficientes de transmisión de potencia y tensión.
-- **Perfiles a lo largo de la línea**: `_calcular_perfiles_desplazamiento` rota `Γ` y `τ` para cada longitud normalizada `ℓ` y obtiene los valores de `Z_in(ℓ)` automáticamente.
+- **Entradas complejas en notación rectangular**: `Z0` y `ZL` se introducen como cadenas del tipo `a+jb`, `a-jb`, `j25`, `-j0.5`, con tolerancia a espacios y comas decimales.
+- **Gestión automática de remanentes**: los desplazamientos en múltiplos de λ se reducen a su equivalente dentro de ±0.5 λ, mostrando cuántas medias longitudes se recortaron.
+- **Resumen enriquecido en consola**: el procedimiento paso a paso imprime numeradores, denominadores, impedancias vistas y perfiles por desplazamiento con los valores formateados en `a ± jb`.
+- **Anotaciones flotantes mejoradas**: los hovers cuentan con fondo opaco, flecha de referencia y reposicionamiento dinámico para evitar que el texto salga del lienzo.
+
+## Requisitos
+
+- Python 3.10 o superior
+- Paquetes: `numpy`, `matplotlib`
+
+Instalación rápida con PowerShell (Windows):
+
+```powershell
+python -m pip install numpy matplotlib
+```
+
+## Ejecución
+
+1. Abre una terminal en la carpeta del proyecto.
+2. Lanza el script con:
+
+   ```powershell
+   python smithchart.py
+   ```
+
+3. Sigue las indicaciones en consola:
+   - Introduce `Z0` y `ZL` en formato rectangular (`50`, `75+j25`, `200-j50`, `j0.8`, etc.).
+   - Ingresa desplazamientos normalizados `ℓ` separados por comas. Valores positivos se interpretan hacia el generador y negativos hacia la carga. Este campo puede dejarse vacío si solo se requiere el análisis en la carga.
+
+Ejemplo rápido:
+
+```text
+=== Generador interactivo de Carta de Smith (completa) ===
+Impedancia característica Z0 [Ω] (ej. 50, 50+j25): 50
+Impedancia de carga ZL [Ω] (ej. 200-j50): 201.3-j50
+Longitudes normalizadas ℓ [...] : 0.25, -0.1, 1.2
+```
+
+El resumen final detalla los parámetros normalizados, coeficientes de reflexión y transmisión, así como las impedancias vistas para cada desplazamiento introducido.
+
+## Interacción con la gráfica
+
+- Navega con la ventana de Matplotlib que aparece tras el ingreso de datos.
+- Pasa el cursor por los marcadores para ver valores específicos; el cuadro flotante se reposiciona automáticamente y mantiene un fondo opaco para garantizar la lectura.
+- Las etiquetas muestran tanto magnitudes como ángulos de `Γ`, `τ`, `Z_in` y longitudes equivalentes, incluyendo las correcciones por múltiplos de media longitud de onda.
+
+## Resultados calculados
+
+El script calcula y presenta:
+
+- Impedancia normalizada `z_N`, numerador `(ZL - Z0)` y denominador `(ZL + Z0)`.
+- Coeficiente de reflexión `Γ_L` (módulo, fase y representación rectangular) y parámetros derivados: ROE (lineal y dB), pérdidas de retorno, pérdidas por desajuste y coeficientes de transmisión de potencia y tensión.
+- Impedancias vistas `Z_in(ℓ)`, componentes `R_in` y `X_in`, así como las rotaciones de `Γ` y `τ` asociadas a cada desplazamiento.
+- Perfiles adicionales para cada `ℓ` ingresado, incluyendo número de medias longitudes eliminadas y remanente en λ.
+
+## Notas adicionales
+
+- El formato rectangular acepta mayúsculas/minúsculas indistintamente, reemplaza comas por puntos y asume `j` como la unidad imaginaria.
+- Si `|Γ_L|` se acerca a 1, el script muestra `ROE` y magnitudes relacionadas como infinito para señalar la condición de resonancia.
+- Los resultados se imprimen tanto en consola como en la ventana gráfica; cierra la figura para finalizar la sesión.
 - **Visualización enriquecida**: carta de Smith completa, círculos de reflexión constante, escalas suplementarias de ángulo, longitud de onda y susceptancia, y regletas inferiores que resaltan el valor calculado.
 - **Experiencia interactiva**: los eventos de desplazamiento del ratón muestran en cuadros emergentes los mismos resultados que el reporte textual, sincronizando datos normalizados y desnormalizados.
 - **Procedimiento documentado**: `imprimir_procedimiento` imprime un resumen paso a paso en consola y lo replica en una figura auxiliar.

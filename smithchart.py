@@ -16,6 +16,8 @@ y anotaciones por hover.
   en las cartas de Smith completas clásicas.
 """
 # Importaciones necesarias 
+import math
+import re
 from typing import Any, List, Optional, Tuple
 
 import matplotlib.pyplot as plt                     # Librería para gráficos  
@@ -37,48 +39,109 @@ def _envolver_angulo_deg(valor: float) -> float:
     """Normaliza un ángulo a (-180, 180] grados."""
     return ((valor + 180.0) % 360.0) - 180.0
 
+
+_COMPLEJO_RECT_RE = re.compile(
+    r"^\s*(?P<real>[+-]?\d+(?:\.\d+)?(?:e[+-]?\d+)?)?"
+    r"(?:(?P<imag_sign>[+-]?)j(?P<imag>\d*(?:\.\d+)?(?:e[+-]?\d+)?))?\s*$",
+    re.IGNORECASE,
+)
+
+
+def _parse_complejo_rectangular(texto: str) -> complex:
+    """Parses strings like '50', '50+j25', '-j10' into complex numbers."""
+    s = texto.strip()
+    if not s:
+        raise ValueError("La cadena está vacía.")
+    s = s.replace(',', '.').replace(' ', '').lower()
+    match = _COMPLEJO_RECT_RE.match(s)
+    if not match:
+        raise ValueError("Formato rectangular inválido.")
+
+    real_str = match.group('real')
+    imag_sign = match.group('imag_sign')
+    imag_str = match.group('imag')
+
+    tiene_imaginaria = 'j' in s or (imag_sign is not None and imag_str is not None)
+    if real_str is None and not tiene_imaginaria:
+        raise ValueError("Formato rectangular inválido.")
+
+    real = float(real_str) if real_str else 0.0
+
+    if tiene_imaginaria:
+        signo = imag_sign if imag_sign else '+'
+        if imag_str is None or imag_str == '':
+            imag_val = 1.0
+        else:
+            imag_val = float(imag_str)
+        imag = imag_val if signo != '-' else -imag_val
+    else:
+        imag = 0.0
+
+    return complex(real, imag)
+
+
+def _formatear_complejo_rectangular(valor: complex, decimales: int = 2) -> str:
+    """Devuelve una representación 'a ± j b' con los decimales deseados."""
+    valor_c = complex(valor)
+    if not np.isfinite(valor_c):
+        return "∞"
+
+    real = valor_c.real
+    imag = valor_c.imag
+    tol = 10 ** (-(decimales + 2))
+    if abs(real) < tol:
+        real = 0.0
+    if abs(imag) < tol:
+        imag = 0.0
+
+    signo = '+' if imag >= 0 else '-'
+    return f"{real:.{decimales}f} {signo} j{abs(imag):.{decimales}f}"
+
 # Función para leer los parámetros de usuario 
 def leer_parametros_usuario():
     """
     Lee desde consola los parámetros básicos del problema:
-    - Z0: impedancia característica de la línea [ohmios]
-    - ZL: impedancia de carga compleja [ohmios], a partir de su parte real (R_L)
-      e imaginaria (X_L).
+    - Z0: impedancia característica de la línea [ohmios], ingresada en formato rectangular "a+jb".
+    - ZL: impedancia de carga compleja [ohmios], también en formato rectangular "a+jb".
 
     Retorna
     -------
-    Z0 : float
+    Z0 : complex
         Impedancia característica de la línea.
     ZL : complex
-        Impedancia de carga compleja R_L + j X_L.
+        Impedancia de carga compleja.
     """
     print("=== Generador interactivo de Carta de Smith (completa) ===")
     print("Alumno: David González Herrera (Carné 19221022)")
     print("Curso: LTT93 - Laboratorio Integrador 2025-2")
-    while True:
-        try:
-            Z0 = float(input("Impedancia característica Z0 [Ω] (por ejemplo 50): "))
-            if Z0 <= 0:
-                print("Z0 debe ser positiva. Intenta de nuevo.")
-                continue
-            break
-        except ValueError:
-            print("Entrada no válida para Z0. Intenta de nuevo.")
+    print("Ingresa cada valor solicitado en formato rectangular (ej. 50, 50+j25, 75-j10) y presiona ENTER.")
 
     while True:
+        entrada_Z0 = input("Impedancia característica Z0 [Ω] (ej. 50, 50+j25): ")
         try:
-            R_L = float(input("Parte real de ZL [Ω] (por ejemplo 75): "))
-            X_L = float(input("Parte imaginaria de ZL [Ω] (por ejemplo 25 para +j25, -25 para -j25): "))
-            ZL = complex(R_L, X_L)
+            Z0 = _parse_complejo_rectangular(entrada_Z0)
+        except ValueError:
+            print("Entrada no válida para Z0. Usa el formato a+jb, por ejemplo 50, 50+j25 o 75-j10.")
+            continue
+
+        if np.isclose(abs(Z0), 0.0, atol=1e-12):
+            print("Z0 no puede ser cero. Intenta de nuevo.")
+            continue
+        break
+
+    while True:
+        entrada_ZL = input("Impedancia de carga ZL [Ω] (ej. 200-j50): ")
+        try:
+            ZL = _parse_complejo_rectangular(entrada_ZL)
             break
         except ValueError:
-            print("Entrada no válida para ZL. Intenta de nuevo.")
+            print("Entrada no válida para ZL. Usa el formato a+jb, por ejemplo 200-j50 o 60+j30.")
 
     desplazamientos: List[float]
     while True:
         entrada_delta = input(
             "Longitudes normalizadas ℓ (en múltiplos de λ) hacia el generador;"
-            " usa valores negativos si deseas moverte hacia la carga (separa con comas, deja vacío para omitir): "
+            " usa valores negativos si deseas moverte hacia la carga (separa con comas, deja vacío para omitir) y presiona ENTER: "
         ).strip()
         if not entrada_delta:
             desplazamientos = []
@@ -99,7 +162,7 @@ def calcular_reflexion_y_parametros(Z0, ZL) -> dict[str, Any]:
 
     Parámetros
     ----------
-    Z0 : float
+    Z0 : complex
         Impedancia característica de la línea [ohmios].
     ZL : complex
         Impedancia de carga [ohmios].
@@ -188,8 +251,8 @@ def imprimir_procedimiento(Z0, ZL, resultados):
     lineas.append("")
     lineas.append("=== Procedimiento paso a paso ===")
     lineas.append("1) Datos de entrada:")
-    lineas.append(f"   Z0 = {Z0:.2f} Ω")
-    lineas.append(f"   ZL = {ZL.real:.2f} + j{ZL.imag:.2f} Ω")
+    lineas.append(f"   Z0 = {_formatear_complejo_rectangular(Z0)} Ω")
+    lineas.append(f"   ZL = {_formatear_complejo_rectangular(ZL)} Ω")
 
     z_norm = resultados["z_norm"]
     lineas.append("2) Impedancia normalizada z_N = ZL / Z0:")
@@ -230,9 +293,10 @@ def imprimir_procedimiento(Z0, ZL, resultados):
     lineas.append(f"   ∠(1 + Γ_L) (ángulo del coef. de transmisión) = {resultados['tau_ang_deg']:.2f} °")
     Zi0 = resultados.get("Z_in_0")
     if Zi0 is not None:
-        if np.isfinite(Zi0.real) and np.isfinite(Zi0.imag):
+        if isinstance(Zi0, complex) and np.isfinite(Zi0):
             lineas.append(
-                f"   Z_in(0) = {Zi0.real:.2f} + j{Zi0.imag:.2f} Ω (impedancia vista en la carga)"
+                "   Z_in(0) = "
+                f"{_formatear_complejo_rectangular(Zi0)} Ω (impedancia vista en la carga)"
             )
         else:
             lineas.append("   Z_in(0) = ∞ (impedancia vista en la carga)")
@@ -242,9 +306,25 @@ def imprimir_procedimiento(Z0, ZL, resultados):
         lineas.append("6) Desplazamientos a lo largo de la línea:")
         for perfil in perfiles:
             sentido = perfil["direccion"]
-            lineas.append(
-                f"   ℓ = {perfil['longitud']:+.2f} λ ({sentido}), rotación = {perfil['rotacion_deg']:+.2f} °"
-            )
+            longitud_eq = perfil.get("longitud", 0.0)
+            longitud_in = perfil.get("longitud_original", longitud_eq)
+            vueltas_medios = perfil.get("vueltas_lambda_media", 0)
+            ajuste_total = perfil.get("ajuste_total_lambda", 0.0)
+
+            if vueltas_medios:
+                lineas.append(
+                    f"   ℓ ingresada = {longitud_in:+.2f} λ ({sentido})"
+                )
+                lineas.append(
+                    f"     Ajuste aplicado: {vueltas_medios} × 0.5 λ = {ajuste_total:+.2f} λ"
+                )
+                lineas.append(
+                    f"     ℓ equivalente = {longitud_eq:+.2f} λ, rotación = {perfil['rotacion_deg']:+.2f} °"
+                )
+            else:
+                lineas.append(
+                    f"   ℓ = {longitud_eq:+.2f} λ ({sentido}), rotación = {perfil['rotacion_deg']:+.2f} °"
+                )
             gamma_d = perfil["gamma"]
             tau_d = perfil["tau"]
             lineas.append(
@@ -255,9 +335,9 @@ def imprimir_procedimiento(Z0, ZL, resultados):
             )
             Zi = perfil.get("Zi")
             if Zi is not None:
-                if np.isfinite(Zi.real) and np.isfinite(Zi.imag):
+                if isinstance(Zi, complex) and np.isfinite(Zi):
                     lineas.append(
-                        f"     Z_in(ℓ) = {Zi.real:.2f} + j{Zi.imag:.2f} Ω (impedancia vista)"
+                        f"     Z_in(ℓ) = {_formatear_complejo_rectangular(Zi)} Ω (impedancia vista)"
                     )
                     lineas.append(
                         f"     R_in(ℓ) = {Zi.real:.2f} Ω, X_in(ℓ) = {Zi.imag:.2f} Ω"
@@ -359,8 +439,20 @@ def _calcular_perfiles_desplazamiento(
 ):
     """Genera los perfiles de Γ, τ y la impedancia vista Z_in a lo largo de la línea."""
     perfiles = []
+    HALF_LAMBDA = 0.5
+    TOL = 1e-9
     for desplazamiento in desplazamientos:
-        rot_rad = -4.0 * np.pi * desplazamiento
+        desplazamiento = float(desplazamiento)
+        num_medios = int(np.floor((abs(desplazamiento) + TOL) / HALF_LAMBDA))
+        ajuste_total = 0.0
+        remanente = desplazamiento
+        if num_medios > 0:
+            ajuste_total = math.copysign(num_medios * HALF_LAMBDA, desplazamiento)
+            remanente = desplazamiento - ajuste_total
+            if abs(remanente) > HALF_LAMBDA - TOL:
+                ajuste_total += math.copysign(HALF_LAMBDA, desplazamiento)
+                remanente -= math.copysign(HALF_LAMBDA, desplazamiento)
+        rot_rad = -4.0 * np.pi * remanente
         gamma_d = gamma_L * np.exp(1j * rot_rad)
         tau_d = 1 + gamma_d
         denom = 1 - gamma_d
@@ -368,19 +460,24 @@ def _calcular_perfiles_desplazamiento(
             Zi = complex(np.inf)
         else:
             Zi = Z0 * (1 + gamma_d) / denom
+        direccion_ref = (
+            "hacia el generador" if desplazamiento > 0
+            else "hacia la carga" if desplazamiento < 0
+            else "en la carga"
+        )
         perfiles.append(dict(
-            longitud=desplazamiento,
-            direccion=(
-                "hacia el generador" if desplazamiento > 0
-                else "hacia la carga" if desplazamiento < 0
-                else "en la carga"
-            ),
-            rotacion_deg=-720.0 * desplazamiento,
+            longitud=remanente,
+            longitud_original=desplazamiento,
+            direccion=direccion_ref,
+            rotacion_deg=-720.0 * remanente,
             gamma=gamma_d,
             gamma_ang_deg=_envolver_angulo_deg(np.degrees(np.angle(gamma_d))),
             tau=tau_d,
             tau_ang_deg=_envolver_angulo_deg(np.degrees(np.angle(tau_d))),
             Zi=Zi,
+            vueltas_lambda_media=num_medios,
+            ajuste_total_lambda=ajuste_total,
+            longitud_equivalente=remanente,
         ))
     return perfiles
 
@@ -542,42 +639,59 @@ def _dibujar_longitudes_electricas(
         ax.plot(
             x,
             y,
-            marker='s',
-            markersize=7,
+            marker='o',
+            markersize=6,
             markerfacecolor='purple',
             markeredgecolor='white',
-            markeredgewidth=1.1,
+            markeredgewidth=1.0,
             linestyle='None',
             zorder=6,
         )
 
         sentido = perfil.get("direccion", "")
+        longitud_eq = perfil.get("longitud", 0.0)
+        longitud_in = perfil.get("longitud_original", longitud_eq)
+        vueltas_medios = perfil.get("vueltas_lambda_media", 0)
+        ajuste_total = perfil.get("ajuste_total_lambda", 0.0)
         Zi = perfil.get("Zi")
-        if isinstance(Zi, complex) and np.isfinite(Zi.real) and np.isfinite(Zi.imag):
-            etiqueta = (
-                f"ℓ{idx} = {perfil['longitud']:+.2f} λ\n"
-                f"Z_in = {Zi.real:.2f} + j{Zi.imag:.2f} Ω"
+
+        if vueltas_medios:
+            encabezado = (
+                f"ℓ{idx} = {longitud_eq:+.2f} λ (eq. de {longitud_in:+.2f} λ)\n"
+                f"Δℓ = {ajuste_total:+.2f} λ ({vueltas_medios} × 0.5λ)"
             )
         else:
-            etiqueta = f"ℓ{idx} = {perfil['longitud']:+.2f} λ\nZ_in = ∞"
+            encabezado = f"ℓ{idx} = {longitud_eq:+.2f} λ"
+
+        if isinstance(Zi, complex) and np.isfinite(Zi):
+            etiqueta = f"{encabezado}\nZ_in = {_formatear_complejo_rectangular(Zi)} Ω"
+        else:
+            etiqueta = f"{encabezado}\nZ_in = ∞"
 
         norma = np.hypot(x, y)
-        if norma == 0:
+        if np.isclose(norma, 0.0):
             norma = 1.0
-        desplazamiento = 0.05
-        x_txt = x + (x / norma) * desplazamiento
-        y_txt = y + (y / norma) * desplazamiento
-        ha, va, rot = _orientacion_texto_circular(x_txt, y_txt)
-        ax.text(
-            x_txt,
-            y_txt,
+            direccion_vec = np.array([1.0, 0.0])
+        else:
+            direccion_vec = np.array([x, y]) / norma
+
+        offset_text = 0.35
+        punto_texto = np.array([x, y]) + direccion_vec * offset_text
+
+        ha = 'left' if punto_texto[0] >= 0 else 'right'
+        va = 'bottom' if punto_texto[1] >= 0 else 'top'
+
+        ax.annotate(
             etiqueta,
+            xy=(x, y),
+            xytext=(punto_texto[0], punto_texto[1]),
+            textcoords='data',
             ha=ha,
             va=va,
             fontsize=6,
             color='purple',
-            rotation=rot,
-            rotation_mode='anchor',
+            bbox=dict(boxstyle='round,pad=0.2', fc='#f4ecff', ec='purple', lw=0.6, alpha=0.95),
+            arrowprops=dict(arrowstyle='->', color='purple', lw=0.6, shrinkA=0.0, shrinkB=1.0),
             zorder=6,
         )
 
@@ -586,10 +700,13 @@ def _dibujar_longitudes_electricas(
                 nombre=f"Longitud eléctrica #{idx}",
                 etiqueta=etiqueta,
                 posicion=(x, y),
-                posicion_texto=(x_txt, y_txt),
+                posicion_texto=(punto_texto[0], punto_texto[1]),
                 direccion=sentido,
                 angulo=perfil.get("gamma_ang_deg"),
-                longitud=perfil.get("longitud"),
+                longitud=longitud_eq,
+                longitud_original=longitud_in,
+                vueltas_lambda_media=vueltas_medios,
+                ajuste_total_lambda=ajuste_total,
                 Zi=Zi,
                 radio_det=0.05,
             )
@@ -917,9 +1034,7 @@ def dibujar_regletas(ax, resultados):
             ax.text(x_text, y, reg["etiqueta"], ha='left', va='center', fontsize=7)
             ax.plot([1.0, x_text - 0.02], [y, y], color='gray', lw=0.5)
 
-    # ==== BLOQUE NUEVO: título + flechas laterales + texto centrado ====
-
-    # Título general (tipo "RADIALLY SCALED PARAMETERS")
+    # Título centrado arriba
     ax.text(
         0.5,
         1.10,
@@ -1026,10 +1141,10 @@ def crear_grafica_completa(Z0, ZL, desplazamientos: Optional[List[float]] = None
     )
 
     anot = ax_smith.annotate(
-        "", xy=(0, 0), xytext=(15, 15),
+        "", xy=(0, 0), xytext=(18, 18),
         textcoords="offset points",
-        bbox=dict(boxstyle="round", fc="w", alpha=0.9),
-        arrowprops=dict(arrowstyle="->")
+        bbox=dict(boxstyle="round,pad=0.3", fc="#ffffff", ec="dimgray", lw=0.9),
+        arrowprops=dict(arrowstyle="->", color="dimgray", lw=0.8)
     )
     anot.set_visible(False)
 
@@ -1080,10 +1195,50 @@ def crear_grafica_completa(Z0, ZL, desplazamientos: Optional[List[float]] = None
             if base_point is None:
                 base_point = (gamma_L.real, gamma_L.imag)
             x_ref, y_ref = base_point
-            dx = 25 if x_ref <= 0 else -120
-            dy = 30 if y_ref <= 0 else -90
-            ha = 'left' if dx >= 0 else 'right'
-            va = 'bottom' if dy >= 0 else 'top'
+            dx_def = 25 if x_ref <= 0 else -120
+            dy_def = 30 if y_ref <= 0 else -90
+            ha_def = 'left' if dx_def >= 0 else 'right'
+            va_def = 'bottom' if dy_def >= 0 else 'top'
+
+            candidatos = [
+                (dx_def, dy_def, ha_def, va_def),
+                (-120 if dx_def > 0 else 25, -90 if dy_def > 0 else 30,
+                 'right' if ha_def == 'left' else 'left',
+                 'top' if va_def == 'bottom' else 'bottom'),
+            ]
+
+            renderer_local = obtener_renderer()
+            seleccionado = candidatos[0]
+            if renderer_local is not None:
+                for candidato in candidatos:
+                    dx_c, dy_c, ha_c, va_c = candidato
+                    anot.set_position((dx_c, dy_c))
+                    anot.set_horizontalalignment(ha_c)  # type: ignore[arg-type]
+                    anot.set_verticalalignment(va_c)    # type: ignore[arg-type]
+                    try:
+                        bbox_anot = anot.get_window_extent(renderer=renderer_local)
+                    except Exception:
+                        bbox_anot = None
+                    if bbox_anot is None:
+                        seleccionado = candidato
+                        break
+                    solapa = False
+                    for texto in ax_smith.texts:
+                        try:
+                            bbox_texto = texto.get_window_extent(renderer=renderer_local)
+                        except Exception:
+                            bbox_texto = None
+                        if bbox_texto is None:
+                            continue
+                        if bbox_anot.overlaps(bbox_texto):
+                            solapa = True
+                            break
+                    if not solapa:
+                        seleccionado = candidato
+                        break
+                dx, dy, ha, va = seleccionado
+            else:
+                dx, dy, ha, va = candidatos[0]
         else:
             dx = 25
             dy = -60
@@ -1091,22 +1246,22 @@ def crear_grafica_completa(Z0, ZL, desplazamientos: Optional[List[float]] = None
             va = 'top'
 
         anot.set_position((dx, dy))
-        anot.set_horizontalalignment(ha)
-        anot.set_verticalalignment(va)
+        anot.set_horizontalalignment(ha)  # type: ignore[arg-type]
+        anot.set_verticalalignment(va)    # type: ignore[arg-type]
     # Formato base del texto de la anotación 
     def formato_valores_base():
         z = resultados["z_norm"]
         lineas = [
-            f"Z0 = {Z0:.2f} Ω",
-            f"ZL = {ZL.real:.2f} + j{ZL.imag:.2f} Ω",
+            f"Z0 = {_formatear_complejo_rectangular(Z0)} Ω",
+            f"ZL = {_formatear_complejo_rectangular(ZL)} Ω",
             f"z_N = {z.real:.2f} + j{z.imag:.2f} (Ad)",
             f"Γ_L = {gamma_L.real:.2f} + j{gamma_L.imag:.2f}",
             f"|Γ_L| = {resultados['gamma_mag']:.2f} (Ad)",
             f"∠Γ_L = {resultados['gamma_ang_deg']:.2f}°",
         ]
         Zi0 = resultados.get('Z_in_0')
-        if isinstance(Zi0, complex) and np.isfinite(Zi0.real) and np.isfinite(Zi0.imag):
-            lineas.append(f"Z_in(0) = {Zi0.real:.2f} + j{Zi0.imag:.2f} Ω")
+        if isinstance(Zi0, complex) and np.isfinite(Zi0):
+            lineas.append(f"Z_in(0) = {_formatear_complejo_rectangular(Zi0)} Ω")
         else:
             lineas.append("Z_in(0) = ∞")
 
@@ -1137,10 +1292,18 @@ def crear_grafica_completa(Z0, ZL, desplazamientos: Optional[List[float]] = None
         lineas = [base, "", "Desplazamientos evaluados:"]
         max_mostrar = 3
         for perfil in perfiles[:max_mostrar]:
-            simbolo = "→" if perfil["longitud"] > 0 else "←" if perfil["longitud"] < 0 else "•"
-            lineas.append(
-                f"{simbolo} ℓ = {perfil['longitud']:+.2f} λ ({perfil['direccion']})"
-            )
+            longitud_eq = perfil.get("longitud", 0.0)
+            longitud_in = perfil.get("longitud_original", longitud_eq)
+            vueltas_medios = perfil.get("vueltas_lambda_media", 0)
+            ajuste_total = perfil.get("ajuste_total_lambda", 0.0)
+            simbolo = "→" if longitud_eq > 0 else "←" if longitud_eq < 0 else "•"
+            descripcion = f"{simbolo} ℓ = {longitud_eq:+.2f} λ ({perfil['direccion']})"
+            if vueltas_medios:
+                descripcion += (
+                    f" — eq. de {longitud_in:+.2f} λ; ajuste {vueltas_medios} × 0.5 λ"
+                    f" ({ajuste_total:+.2f} λ)"
+                )
+            lineas.append(descripcion)
             lineas.append(
                 f"   ∠Γ(ℓ) = {perfil['gamma_ang_deg']:.2f}°, ∠τ(ℓ) = {perfil['tau_ang_deg']:.2f}°"
             )
@@ -1176,18 +1339,29 @@ def crear_grafica_completa(Z0, ZL, desplazamientos: Optional[List[float]] = None
                         anot.xy = (x_m, y_m)
                         configurar_anotacion(ax_smith, base_point=(x_m, y_m))
                         if marcador['nombre'].startswith("Longitud"):
-                            texto_lineas = [f"{marcador['nombre']}: {marcador['etiqueta']}"]
+                            texto_lineas = [marcador['nombre'] + ":", marcador['etiqueta']]
                             direccion = marcador.get('direccion')
                             if direccion:
                                 texto_lineas.append(f"Dirección: {direccion}")
+                            vueltas_medios = marcador.get('vueltas_lambda_media', 0)
+                            if vueltas_medios:
+                                long_in = marcador.get('longitud_original')
+                                long_eq = marcador.get('longitud')
+                                ajuste_total = marcador.get('ajuste_total_lambda', 0.0)
+                                texto_lineas.append(
+                                    f"Equivalente: {long_eq:+.3f} λ (entrada {long_in:+.3f} λ)"
+                                )
+                                texto_lineas.append(
+                                    f"Ajuste aplicado: {vueltas_medios} × 0.5 λ = {ajuste_total:+.3f} λ"
+                                )
                             ang_local = marcador.get('angulo')
                             if ang_local is not None and np.isfinite(ang_local):
                                 texto_lineas.append(f"∠Γ(ℓ) = {ang_local:.2f}°")
                             Zi_loc = marcador.get('Zi')
                             if Zi_loc is not None:
-                                if isinstance(Zi_loc, complex) and np.isfinite(Zi_loc.real) and np.isfinite(Zi_loc.imag):
+                                if isinstance(Zi_loc, complex) and np.isfinite(Zi_loc):
                                     texto_lineas.append(
-                                        f"Z_in(ℓ) = {Zi_loc.real:.2f} + j{Zi_loc.imag:.2f} Ω"
+                                        f"Z_in(ℓ) = {_formatear_complejo_rectangular(Zi_loc)} Ω"
                                     )
                                 else:
                                     texto_lineas.append("Z_in(ℓ) = ∞")
