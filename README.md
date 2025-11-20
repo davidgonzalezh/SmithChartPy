@@ -69,7 +69,6 @@ El script calcula y presenta:
 - **Experiencia interactiva**: los eventos de desplazamiento del ratón muestran en cuadros emergentes los mismos resultados que el reporte textual, incluyendo potencias, tensiones, ROE/VROE/IROE y datos normalizados.
 - **Procedimiento documentado**: `imprimir_procedimiento` imprime un resumen paso a paso en consola y lo replica en una figura auxiliar.
 
-
 ## Fundamentos matemáticos
 
 - **Impedancia normalizada**: \( z_N = \frac{Z_L}{Z_0} = r + jx \).

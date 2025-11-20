@@ -440,7 +440,7 @@ def imprimir_procedimiento(Z0: complex, ZL: complex, resultados: Dict[str, Any])
     # Perfiles de línea
     perfiles = resultados.get("perfiles_linea", [])
     if perfiles:
-        lineas.append("6) Desplazamientos a lo largo de la línea:")
+        lineas.append("8) Desplazamientos a lo largo de la línea:")
         for perfil in perfiles:
             longitud_eq = perfil.longitud
             longitud_in = perfil.longitud_original
@@ -1107,27 +1107,44 @@ def _generar_texto_base(Z0: complex, ZL: complex, resultados: Dict[str, Any]) ->
     
     return "\n".join(lineas)
 
-def _generar_texto_perfil(perfil: PerfilLinea, idx: int) -> str:
-    """Genera texto específico para un perfil de línea."""
-    lineas = [
-        f"Longitud eléctrica #{idx}:",
-        perfil.etiqueta if hasattr(perfil, 'etiqueta') else f"ℓ = {perfil.longitud:+.2f} λ",
-        f"Dirección: {perfil.direccion}",
-    ]
-    
-    if perfil.vueltas_lambda_media:
+def _generar_texto_perfil(marcador: Dict[str, Any]) -> str:
+    """Construye el texto de hover para un marcador de longitud eléctrica."""
+    lineas = [f"{marcador.get('nombre', 'Longitud eléctrica')}:"]
+
+    etiqueta = marcador.get('etiqueta')
+    if etiqueta:
+        lineas.append(etiqueta)
+    else:
+        longitud = marcador.get('longitud', 0.0)
+        lineas.append(f"ℓ = {longitud:+.2f} λ")
+
+    direccion = marcador.get('direccion')
+    if direccion:
+        lineas.append(f"Dirección: {direccion}")
+
+    vueltas = marcador.get('vueltas_lambda_media', 0)
+    if vueltas:
+        longitud_eq = marcador.get('longitud', 0.0)
+        longitud_in = marcador.get('longitud_original', longitud_eq)
+        ajuste_total = marcador.get('ajuste_total_lambda', 0.0)
         lineas.append(
-            f"Equivalente: {perfil.longitud:+.3f} λ (entrada {perfil.longitud_original:+.3f} λ)"
+            f"Equivalente: {longitud_eq:+.3f} λ (entrada {longitud_in:+.3f} λ)"
         )
         lineas.append(
-            f"Ajuste aplicado: {perfil.vueltas_lambda_media} × 0.5 λ = {perfil.ajuste_total_lambda:+.3f} λ"
+            f"Ajuste aplicado: {vueltas} × 0.5 λ = {ajuste_total:+.3f} λ"
         )
-    
-    lineas.append(f"∠Γ(ℓ) = {perfil.gamma_ang_deg:.2f}°")
-    
-    if isinstance(perfil.Zi, complex) and np.isfinite(perfil.Zi):
-        lineas.append(f"Z_in(ℓ) = {_formatear_complejo_rectangular(perfil.Zi)} Ω")
-    
+
+    angulo = marcador.get('angulo')
+    if angulo is not None and np.isfinite(angulo):
+        lineas.append(f"∠Γ(ℓ) = {angulo:.2f}°")
+
+    Zi = marcador.get('Zi')
+    if Zi is not None:
+        if isinstance(Zi, complex) and np.isfinite(Zi):
+            lineas.append(f"Z_in(ℓ) = {_formatear_complejo_rectangular(Zi)} Ω")
+        else:
+            lineas.append("Z_in(ℓ) = ∞")
+
     return "\n".join(lineas)
 
 # =============================================================================
@@ -1237,7 +1254,7 @@ def crear_grafica_completa(Z0: complex, ZL: complex, desplazamientos: Optional[L
                     x_m, y_m = marcador['posicion']
                     if np.hypot(x_evt - x_m, y_evt - y_m) < marcador.get('radio_det', 0.05):
                         if marcador['nombre'].startswith("Longitud"):
-                            texto = _generar_texto_perfil(perfil, idx)
+                            texto = _generar_texto_perfil(marcador)
                         else:
                             texto = f"{marcador['nombre']}: {marcador['angulo_deg']:.2f}°"
                         
