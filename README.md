@@ -4,10 +4,10 @@ Generador interactivo en Python que construye la carta de Smith completa emplead
 
 ## Novedades destacadas 2025-2
 
-- **Entradas complejas en notación rectangular**: `Z0` y `ZL` se introducen como cadenas del tipo `a+jb`, `a-jb`, `j25`, `-j0.5`, con tolerancia a espacios y comas decimales.
-- **Gestión automática de remanentes**: los desplazamientos en múltiplos de λ se reducen a su equivalente dentro de ±0.5 λ, mostrando cuántas medias longitudes se recortaron.
-- **Resumen enriquecido en consola**: el procedimiento paso a paso imprime numeradores, denominadores, impedancias vistas y perfiles por desplazamiento con los valores formateados en `a ± jb`.
-- **Anotaciones flotantes mejoradas**: los hovers cuentan con fondo opaco, flecha de referencia y reposicionamiento dinámico para evitar que el texto salga del lienzo.
+- **Entradas rectangulares tolerantes**: `Z0` y `ZL` aceptan `a±jb`, `±jB` o valores reales con espacios y comas decimales.
+- **Gestión automática de remanentes**: los desplazamientos en múltiplos de λ se reducen a ±0.5 λ, indicando cuántas medias longitudes se recortaron.
+- **Resumen enriquecido en consola**: el procedimiento listo imprime numerador/denominador de `Γ`, impedancias vistas, perfiles desplazados y ahora potencias y tensiones lineales/logarítmicas.
+- **Anotaciones flotantes mejoradas**: los hovers usan fondo opaco, flecha de referencia y reposicionamiento inteligente para evitar solapes.
 
 ## Requisitos
 
@@ -55,7 +55,8 @@ El resumen final detalla los parámetros normalizados, coeficientes de reflexió
 El script calcula y presenta:
 
 - Impedancia normalizada `z_N`, numerador `(ZL - Z0)` y denominador `(ZL + Z0)`.
-- Coeficiente de reflexión `Γ_L` (módulo, fase y representación rectangular) y parámetros derivados: ROE (lineal y dB), pérdidas de retorno, pérdidas por desajuste y coeficientes de transmisión de potencia y tensión.
+- Coeficiente de reflexión `Γ_L` (módulo, fase y representación rectangular) y parámetros derivados: ROE/VROE/IROE (lineal y dB), pérdidas de retorno, pérdidas por desajuste y coeficientes de transmisión de potencia y tensión.
+- Potencias incidente, reflejada y transmitida tomando 1 W de referencia, con equivalentes en mW, dBm y dBW; tensiones incidente/reflejada/carga para 1 V rms, con conversiones a mV, dBV y dBmV.
 - Impedancias vistas `Z_in(ℓ)`, componentes `R_in` y `X_in`, así como las rotaciones de `Γ` y `τ` asociadas a cada desplazamiento.
 - Perfiles adicionales para cada `ℓ` ingresado, incluyendo número de medias longitudes eliminadas y remanente en λ.
 
@@ -65,44 +66,15 @@ El script calcula y presenta:
 - Si `|Γ_L|` se acerca a 1, el script muestra `ROE` y magnitudes relacionadas como infinito para señalar la condición de resonancia.
 - Los resultados se imprimen tanto en consola como en la ventana gráfica; cierra la figura para finalizar la sesión.
 - **Visualización enriquecida**: carta de Smith completa, círculos de reflexión constante, escalas suplementarias de ángulo, longitud de onda y susceptancia, y regletas inferiores que resaltan el valor calculado.
-- **Experiencia interactiva**: los eventos de desplazamiento del ratón muestran en cuadros emergentes los mismos resultados que el reporte textual, sincronizando datos normalizados y desnormalizados.
+- **Experiencia interactiva**: los eventos de desplazamiento del ratón muestran en cuadros emergentes los mismos resultados que el reporte textual, incluyendo potencias, tensiones, ROE/VROE/IROE y datos normalizados.
 - **Procedimiento documentado**: `imprimir_procedimiento` imprime un resumen paso a paso en consola y lo replica en una figura auxiliar.
 
-## Requisitos de software
-
-- Python 3.9 o superior.
-- Bibliotecas `matplotlib` y `numpy`.
-
-Instala las dependencias con:
-
-```powershell
-py -3 -m pip install matplotlib numpy
-```
-
-## Ejecución paso a paso
-
-1. Abre PowerShell en el directorio del proyecto y ejecuta:
-
-   ```powershell
-   py -3 smithchart.py
-   ```
-
-2. Introduce los valores cuando se soliciten:
-   - `Z0`: impedancia característica (ej. `50`). Debe ser positiva.
-   - `Parte real de ZL`: resistencia de la carga (ej. `60`).
-   - `Parte imaginaria de ZL`: reactancia de la carga (ej. `30` para `+j30`, `-25` para `-j25`).
-   - `ℓ`: lista opcional de desplazamientos normalizados en múltiplos de `λ`, separados por comas. Valores positivos representan desplazamientos hacia el generador; negativos, hacia la carga. Deja vacío si no deseas evaluar puntos adicionales.
-3. Observa la salida:
-   - Consola: reporte paso a paso con fórmulas, resultados normalizados y desnormalizados, y resumen por cada desplazamiento ingresado.
-   - Ventana principal: carta de Smith, círculo de magnitud constante, marcadores de ángulos y regletas inferiores resaltando el resultado.
-   - Ventana secundaria: transcripción formateada del procedimiento y una guía de las escalas auxiliares.
-   - Interacción: al pasar el mouse por el punto `Γ_L`, los marcadores o las regletas se muestran simultáneamente `Γ`, `τ`, `Z_in`, `R_in`, `X_in`, ROE, etc.
 
 ## Fundamentos matemáticos
 
 - **Impedancia normalizada**: \( z_N = \frac{Z_L}{Z_0} = r + jx \).
 - **Coeficiente de reflexión**: \( \Gamma_L = \frac{Z_L - Z_0}{Z_L + Z_0} \). El script almacena `Γ_L`, `ZL − Z0` y `ZL + Z0` para reportar tanto el valor normalizado como el desnormalizado.
-- **Relación de onda estacionaria (ROE/SWR)**: \( \text{ROE} = \frac{1 + |\Gamma_L|}{1 - |\Gamma_L|} \). A partir de \(|\Gamma_L|\) se calculan pérdidas de retorno, pérdidas por desajuste, atenuación equivalente y coeficiente de pérdida por ROE.
+- **Relación de onda estacionaria (ROE/SWR)**: \( \text{ROE} = \frac{1 + |\Gamma_L|}{1 - |\Gamma_L|} \). Se reporta como ROE, VROE e IROE y se aprovecha para derivar pérdidas de retorno, pérdidas por desajuste, atenuación equivalente y coeficiente de pérdida por ROE.
 - **Coeficiente de transmisión de tensión**: \( \tau = 1 + \Gamma_L \). Se registran magnitud, ángulo y el coeficiente de transmisión de potencia \( T_P = 1 - |\Gamma_L|^2 \).
 - **Impedancia vista tras un desplazamiento**: para \( \ell \) en múltiplos de \( \lambda \), \( \Gamma(\ell) = \Gamma_L e^{-j4\pi \ell} \) y \( Z_{in}(\ell) = Z_0 \frac{1 + \Gamma(\ell)}{1 - \Gamma(\ell)} \). El reporte lista `Z_in`, `R_in` y `X_in` cuando el valor es finito.
 
