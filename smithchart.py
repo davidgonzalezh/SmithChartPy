@@ -25,7 +25,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.backend_bases import RendererBase
 from matplotlib.patches import Circle
-from numpy.typing import NDArray
 
 # =============================================================================
 # CONSTANTES DE DISEÑO
@@ -856,7 +855,7 @@ def dibujar_regletas(ax, resultados: Dict[str, Any]):
 def _marcar_angulos_coeficientes(ax, angulo_reflexion_deg: Optional[float],
                                 angulo_transmision_deg: Optional[float]) -> List[Dict[str, Any]]:
     """Marca los ángulos de reflexión y transmisión."""
-    marcadores = []
+    marcadores: List[Dict[str, Any]] = []
     
     def dibujar_marcador(angulo_deg: Optional[float], radio: float, color: str, 
                         offset: float, nombre: str):
@@ -889,7 +888,7 @@ def _marcar_angulos_coeficientes(ax, angulo_reflexion_deg: Optional[float],
 
 def _dibujar_longitudes_electricas(ax, perfiles: List[PerfilLinea]) -> List[Dict[str, Any]]:
     """Dibuja los puntos asociados a las longitudes eléctricas."""
-    marcadores = []
+    marcadores: List[Dict[str, Any]] = []
     
     for idx, perfil in enumerate(perfiles, start=1):
         x, y = perfil.gamma.real, perfil.gamma.imag
@@ -1183,13 +1182,16 @@ def crear_grafica_completa(Z0: complex, ZL: complex, desplazamientos: Optional[L
     # Dibujar carta y elementos
     dibujar_carta_smith(ax_smith)
     gamma_L = resultados["gamma_L"]
-    ax_smith.plot(gamma_L.real, gamma_L.imag, 'ro', label=r'$\Gamma_L$')
+    gamma_L_x = gamma_L.real
+    gamma_L_y = gamma_L.imag
+    gamma_mag = resultados["gamma_mag"]
+    ax_smith.plot(gamma_L_x, gamma_L_y, 'ro', label=r'$\Gamma_L$')
     
     # Círculo de |Γ| constante
     theta = np.linspace(0, 2*np.pi, 400)
     ax_smith.plot(
-        resultados["gamma_mag"] * np.cos(theta),
-        resultados["gamma_mag"] * np.sin(theta),
+        gamma_mag * np.cos(theta),
+        gamma_mag * np.sin(theta),
         'r--', lw=1.0, label=r'|$\Gamma$| constante'
     )
     
@@ -1199,6 +1201,10 @@ def crear_grafica_completa(Z0: complex, ZL: complex, desplazamientos: Optional[L
     )
     marcadores_longitudes = _dibujar_longitudes_electricas(ax_smith, perfiles)
     marcadores_interactivos = marcadores_angulos + marcadores_longitudes
+
+    # Precomputar texto de hover para cada longitud eléctrica
+    for marcador in marcadores_longitudes:
+        marcador["texto_hover"] = _generar_texto_perfil(marcador)
     
     # Leyenda
     ax_smith.legend(loc='upper left', bbox_to_anchor=(1.15, 1.15), fontsize=8, frameon=False)
@@ -1231,7 +1237,10 @@ def crear_grafica_completa(Z0: complex, ZL: complex, desplazamientos: Optional[L
     )
     
     # Sistema de hover
-    hover_manager = HoverManager(ax_smith, ax_regletas, fig, gamma_L, resultados["gamma_mag"])
+    hover_manager = HoverManager(ax_smith, ax_regletas, fig, gamma_L, gamma_mag)
+
+    # Precomputar texto base de hover
+    texto_base_hover = _generar_texto_base(Z0, ZL, resultados)
     
     def on_move(event):
         if event.inaxes not in (ax_smith, ax_regletas):
@@ -1244,8 +1253,8 @@ def crear_grafica_completa(Z0: complex, ZL: complex, desplazamientos: Optional[L
             x_evt, y_evt = event.xdata, event.ydata
             
             # Detectar cercanía a Γ_L
-            if np.hypot(x_evt - gamma_L.real, y_evt - gamma_L.imag) < 0.06:
-                hover_manager.mostrar(gamma_L.real, gamma_L.imag, _generar_texto_base(Z0, ZL, resultados), ax_smith)
+            if np.hypot(x_evt - gamma_L_x, y_evt - gamma_L_y) < 0.06:
+                hover_manager.mostrar(gamma_L_x, gamma_L_y, texto_base_hover, ax_smith)
                 mostrar = True
             
             # Detectar marcadores
@@ -1254,7 +1263,7 @@ def crear_grafica_completa(Z0: complex, ZL: complex, desplazamientos: Optional[L
                     x_m, y_m = marcador['posicion']
                     if np.hypot(x_evt - x_m, y_evt - y_m) < marcador.get('radio_det', 0.05):
                         if marcador['nombre'].startswith("Longitud"):
-                            texto = _generar_texto_perfil(marcador)
+                            texto = marcador.get("texto_hover") or _generar_texto_perfil(marcador)
                         else:
                             texto = f"{marcador['nombre']}: {marcador['angulo_deg']:.2f}°"
                         
@@ -1263,9 +1272,9 @@ def crear_grafica_completa(Z0: complex, ZL: complex, desplazamientos: Optional[L
                         break
         
         elif event.inaxes is ax_regletas and event.xdata is not None:
-            if abs(event.xdata - resultados["gamma_mag"]) < 0.02:
-                hover_manager.mostrar(resultados["gamma_mag"], ax_regletas.get_ylim()[1],
-                                     _generar_texto_base(Z0, ZL, resultados), ax_regletas)
+            if abs(event.xdata - gamma_mag) < 0.02:
+                hover_manager.mostrar(gamma_mag, ax_regletas.get_ylim()[1],
+                                     texto_base_hover, ax_regletas)
                 mostrar = True
         
         if not mostrar:
