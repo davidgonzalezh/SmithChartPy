@@ -19,13 +19,14 @@ y anotaciones por hover.
 # Importaciones necesarias 
 import math
 import re
-from typing import Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.backend_bases import RendererBase
 from matplotlib.patches import Circle
 from matplotlib.collections import LineCollection  # Optimización: Para renderizado rápido de líneas
+from matplotlib.backends.backend_pdf import PdfPages  # NUEVO: para PDF multipágina
 
 # Constantes de diseño de la carta
 RADIO_CARTA = 1.0
@@ -34,6 +35,7 @@ ESCALA_ANGULO_EXTERNA = 1.24
 ESCALA_LONGITUD_GENERADOR = 1.18
 ESCALA_LONGITUD_CARGA = 1.24
 ESCALA_PARAMETROS = 1.34
+VELOCIDAD_LUZ = 299_792_458.0  # m/s
 
 # Función para envolver ángulos en grados
 def _envolver_angulo_deg(valor: float) -> float:
@@ -90,6 +92,81 @@ def _parse_complejo_rectangular(texto: str) -> complex:
 
     return complex(real, imag)
 
+
+_FRECUENCIA_SUFIJOS = (
+    ("ghz", 1e9),
+    ("g", 1e9),
+    ("mhz", 1e6),
+    ("m", 1e6),
+    ("khz", 1e3),
+    ("k", 1e3),
+    ("hz", 1.0),
+)
+
+
+def _parse_frecuencia(texto: str) -> float:
+    """Convierte una cadena opcionalmente con sufijos (Hz, kHz, MHz, GHz) a Hz."""
+    s = texto.strip().lower().replace(' ', '')
+    s = s.replace(',', '.')
+    if not s:
+        raise ValueError("La cadena está vacía.")
+
+    for sufijo, factor in _FRECUENCIA_SUFIJOS:
+        if s.endswith(sufijo) and len(s) > len(sufijo):
+            base = s[:-len(sufijo)]
+            return float(base) * factor
+
+    return float(s)
+
+def _parse_porcentaje(texto: str) -> float:
+    """
+    Convierte cadenas como '75', '75%', '0.75' en un número entre 0 y 1.
+
+    - '75' o '75%' -> 0.75
+    - '0.75'       -> 0.75
+
+    Se usa para el factor de velocidad (VNP) de la LT.
+    """
+    s = texto.strip().lower().replace(' ', '').replace(',', '.')
+    if not s:
+        raise ValueError("Cadena vacía para porcentaje.")
+    if s.endswith('%'):
+        base = s[:-1]
+        return float(base) / 100.0
+    val = float(s)
+    if val > 1.0:      # se asume que viene en %
+        val = val / 100.0
+    return val
+
+
+def _formatear_frecuencia_hz(valor_hz: float) -> str:
+    """Devuelve la frecuencia con el sufijo más legible (Hz, kHz, MHz o GHz)."""
+    magnitudes = (
+        (1e9, "GHz"),
+        (1e6, "MHz"),
+        (1e3, "kHz"),
+    )
+    for factor, sufijo in magnitudes:
+        if valor_hz >= factor:
+            return f"{valor_hz / factor:.3f} {sufijo}"
+    return f"{valor_hz:.3f} Hz"
+
+
+def _formatear_longitud_m(valor_m: float, *, signo: bool = True) -> str:
+    """Formatea longitudes en metros con resolución adaptable."""
+    abs_val = abs(valor_m)
+    if abs_val >= 10:
+        fmt = "{:+.3f}" if signo else "{:.3f}"
+    elif abs_val >= 1:
+        fmt = "{:+.4f}" if signo else "{:.4f}"
+    elif abs_val >= 0.01:
+        fmt = "{:+.5f}" if signo else "{:.5f}"
+    elif abs_val == 0:
+        fmt = "{:+.4f}" if signo else "{:.4f}"
+    else:
+        fmt = "{:+.2e}" if signo else "{:.2e}"
+    return f"{fmt.format(valor_m)} m"
+
 # Función para formatear números complejos en forma rectangular
 def _formatear_complejo_rectangular(valor: complex, decimales: int = 2) -> str:
     """Devuelve una representación 'a ± j b' con los decimales deseados."""
@@ -111,15 +188,41 @@ def _formatear_complejo_rectangular(valor: complex, decimales: int = 2) -> str:
 # Función para leer los parámetros de usuario 
 def leer_parametros_usuario():
     """
-    Lee desde consola los parámetros básicos del problema.
+    Solicita por consola todos los datos necesarios:
+
+    - Z0 (siempre).
+    - Tipo de carga / escenario:
+        1) Carga general ZL (compleja).
+        2) Circuito abierto (ZL = ∞).
+        3) Cortocircuito (ZL = 0).
+        4) Línea con carga resistiva pura conocida por ROE (se calculan ZL1 y ZL2).
+
+    - Opcionalmente:
+        * Frecuencia (con sufijos Hz/kHz/MHz/GHz).
+        * Factor de velocidad VNP (%) para la línea.
+        * Longitud física total de la línea.
+        * Distancias físicas donde se quiere evaluar Γ y ZL′.
+        * Longitudes eléctricas normalizadas (en múltiplos de λ).
+
+    Además prepara un diccionario `parametros_linea` con:
+        - frecuencia_hz
+        - lambda_m
+        - vp_m_s
+        - vnp (tanto por uno)
+        - tipo_carga
+        - roe_resistiva (si aplica)
+        - cargas_resistivas_equivalentes (si aplica)
+    y la lista `perfiles_config` con las longitudes eléctricas solicitadas.
     """
     print("=== Generador interactivo de Carta de Smith (completa) ===")
     print("Alumno: David González Herrera (Carné 19221022)")
-    print("Curso: LTT93 - Laboratorio Integrador 2025-2")
-    print("Ingresa cada valor solicitado en formato rectangular (ej. 50, 50+j25, 75-j10) y presiona ENTER.")
+    print("Curso: LTT93 - Laboratorio Integrador 2025-2\n")
+    print("Ingresa cada valor solicitado en formato rectangular (ej. 50, 50+j25, 75-j10)")
+    print("o en las unidades indicadas para frecuencia, longitudes y ROE.\n")
 
+    # --- Z0 (siempre obligatorio) ---
     while True:
-        entrada_Z0 = input("Impedancia característica Z0 [Ω] (ej. 50, 50+j25): ")
+        entrada_Z0 = input("Impedancia característica Z0 [Ω] (ej. 50, 75, 50+j25): ")
         try:
             Z0 = _parse_complejo_rectangular(entrada_Z0)
         except ValueError:
@@ -131,95 +234,369 @@ def leer_parametros_usuario():
             continue
         break
 
-    while True:
-        entrada_ZL = input("Impedancia de carga ZL [Ω] (ej. 200-j50): ")
-        try:
-            ZL = _parse_complejo_rectangular(entrada_ZL)
-            break
-        except ValueError:
-            print("Entrada no válida para ZL.")
+    # --- Tipo de carga / escenario ---
+    print("\nSelecciona el tipo de carga / escenario:")
+    print("  1) Carga general ZL (compleja).")
+    print("  2) Circuito abierto (CTO. ABIERTO, ZL = ∞).")
+    print("  3) Cortocircuito (CTO, ZL = 0).")
+    print("  4) Línea con carga resistiva pura conocida por ROE (se calculan ZL1 y ZL2).")
 
-    desplazamientos: List[float]
+    tipo_carga = "general"
+    roe_resistiva = None
+    cargas_resistivas_equivalentes = None
+
+    while True:
+        modo = input("Opción [1/2/3/4]: ").strip()
+        if modo not in ("1", "2", "3", "4"):
+            print("Opción no válida. Elige 1, 2, 3 o 4.")
+            continue
+        modo = int(modo)
+        break
+
+    # --- ZL según el modo escogido ---
+    if modo == 1:
+        # Carga general ZL compleja
+        while True:
+            entrada_ZL = input("Impedancia de carga ZL [Ω] (ej. 200-j50): ")
+            try:
+                ZL = _parse_complejo_rectangular(entrada_ZL)
+                break
+            except ValueError:
+                print("Entrada no válida para ZL. Usa formato a+jb.")
+        tipo_carga = "general"
+
+    elif modo == 2:
+        # Circuito abierto
+        ZL = complex(np.inf)  # solo para guardar, el cálculo usará tipo_carga
+        tipo_carga = "abierto"
+        print(">> Se trabajará con circuito abierto: ZL = ∞, Γ_L = +1 ∠0°.")
+
+    elif modo == 3:
+        # Cortocircuito
+        ZL = 0.0 + 0.0j
+        tipo_carga = "corto"
+        print(">> Se trabajará con cortocircuito: ZL = 0, Γ_L = -1 ∠180°.")
+
+    else:
+        # ROE conocida, carga resistiva pura (dos posibles ZL).
+        tipo_carga = "roe_resistiva"
+        while True:
+            entrada_roe = input("Valor de ROE (SWR) (>1, ej. 1.5, 2.65): ").strip()
+            try:
+                roe_resistiva = float(entrada_roe.replace(',', '.'))
+                if roe_resistiva <= 1.0:
+                    print("La ROE debe ser mayor que 1. Intenta de nuevo.")
+                    continue
+                break
+            except ValueError:
+                print("Entrada no válida para ROE.")
+        # Para carga resistiva pura hay dos soluciones clásicas:
+        #   ZL1 = Z0 * S   (ZL1 > Z0, fase en fase)
+        #   ZL2 = Z0 / S   (ZL2 < Z0, fase en contrafase)
+        ZL1 = Z0.real * roe_resistiva  # asumimos Z0 real para este caso
+        ZL2 = Z0.real / roe_resistiva
+        cargas_resistivas_equivalentes = (ZL1, ZL2)
+        print(f">> Carga resistiva pura con ROE = {roe_resistiva:.3f}:")
+        print(f"   ZL1 (en fase, ZL > Z0)  ≈ {ZL1:.3f} Ω")
+        print(f"   ZL2 (contra fase, ZL < Z0) ≈ {ZL2:.3f} Ω")
+        # Para dibujar la carta tomamos por defecto la solución en fase (ZL1),
+        # de manera que Γ_L sea positivo real.
+        ZL = complex(ZL1, 0.0)
+
+    # --- Longitudes eléctricas normalizadas directamente en λ ---
+    desplazamientos_norm: List[float]
     while True:
         entrada_delta = input(
-            "Longitudes normalizadas ℓ (en múltiplos de λ) hacia el generador;"
-            " usa valores negativos si deseas moverte hacia la carga (separa con comas, deja vacío para omitir): "
+            "\nLongitudes normalizadas ℓ (en múltiplos de λ) hacia el generador;\n"
+            "usa valores negativos si deseas moverte hacia la carga\n"
+            "(separa con comas, deja vacío para omitir): "
         ).strip()
         if not entrada_delta:
-            desplazamientos = []
+            desplazamientos_norm = []
             break
         try:
-            desplazamientos = [float(token.strip()) for token in entrada_delta.split(',') if token.strip()]
+            desplazamientos_norm = [
+                float(token.strip())
+                for token in entrada_delta.split(',')
+                if token.strip()
+            ]
+            break
+        except ValueError:
+            print("Entrada no válida. Usa números separados por comas (ej. 0.25, 0.5, -0.1).")
+
+    perfiles_config: List[Dict[str, Any]] = [
+        dict(longitud_norm=valor, fuente="ℓ normalizada")
+        for valor in desplazamientos_norm
+    ]
+
+    # --- Frecuencia y factor de velocidad VNP ---
+    frecuencia_hz: Optional[float] = None
+    lambda_m: Optional[float] = None
+    vnp: Optional[float] = None
+    vp_m_s: Optional[float] = None
+
+    while True:
+        entrada_f = input(
+            "\nFrecuencia de operación f [Hz] (acepta sufijos k/M/G, deja vacío para omitir): "
+        ).strip()
+        if not entrada_f:
+            break
+        try:
+            frecuencia_hz = _parse_frecuencia(entrada_f)
+            if frecuencia_hz <= 0:
+                print("La frecuencia debe ser positiva. Intenta de nuevo.")
+                frecuencia_hz = None
+                continue
+        except ValueError:
+            print("Entrada no válida para la frecuencia. Ejemplos: 915e6, 2.45GHz, 60MHz.")
+            continue
+
+        # Factor de velocidad VNP (opcional pero MUY útil)
+        entrada_vnp = input(
+            "Factor de velocidad de la LT VNP [%] (ej. 75, 80; ENTER para asumir 100% c): "
+        ).strip()
+        if entrada_vnp:
+            try:
+                vnp = _parse_porcentaje(entrada_vnp)
+                if not (0 < vnp <= 1.0):
+                    print("VNP debe estar entre 0 y 100%. Se asumirá 100%.")
+                    vnp = 1.0
+            except ValueError:
+                print("No se pudo interpretar VNP, se asume 100%.")
+                vnp = 1.0
+        else:
+            vnp = 1.0
+
+        vp_m_s = vnp * VELOCIDAD_LUZ
+        lambda_m = vp_m_s / frecuencia_hz
+        break
+
+    # --- Longitud física total de la línea ---
+    longitud_total_m: Optional[float] = None
+    while True:
+        entrada_L = input(
+            "\nLongitud física total de la línea L [m] (deja vacío para omitir): "
+        ).strip()
+        if not entrada_L:
+            break
+        try:
+            longitud_total_m = float(entrada_L.replace(',', '.'))
+            if longitud_total_m <= 0:
+                print("La longitud debe ser positiva. Intenta de nuevo.")
+                longitud_total_m = None
+                continue
+            break
+        except ValueError:
+            print("Entrada no válida. Usa números positivos (ej. 2.5 o 0.75).")
+
+    # --- Distancias físicas específicas donde quieres evaluar Γ y ZL′ ---
+    distancias_fisicas: List[float] = []
+    while True:
+        entrada_dist = input(
+            "Distancias físicas d [m] hacia el generador (usa signo para indicar dirección;\n"
+            "separa con comas; deja vacío para omitir): "
+        ).strip()
+        if not entrada_dist:
+            break
+        if lambda_m is None:
+            print("Primero proporciona la frecuencia (y VNP) para convertir distancias físicas en longitudes eléctricas.")
+            continue
+        try:
+            distancias_fisicas = [
+                float(token.replace(',', '.'))
+                for token in entrada_dist.split(',')
+                if token.strip()
+            ]
             break
         except ValueError:
             print("Entrada no válida. Usa números separados por comas.")
 
-    return Z0, ZL, desplazamientos
+    # --- Construir perfiles_config usando λ calculada ---
+    if lambda_m is not None:
+        for entrada in perfiles_config:
+            entrada.setdefault("distancia_m", entrada["longitud_norm"] * lambda_m)
+        for distancia in distancias_fisicas:
+            perfiles_config.append(
+                dict(
+                    longitud_norm=distancia / lambda_m,
+                    distancia_m=distancia,
+                    fuente="distancia física",
+                )
+            )
+    elif distancias_fisicas:
+        print("Se ignorarán las distancias físicas porque no se especificó la frecuencia/VNP.")
+        distancias_fisicas = []
+
+    # --- Empaquetar parámetros de línea ---
+    parametros_linea: Dict[str, Any] = {
+        "tipo_carga": tipo_carga,
+    }
+    if frecuencia_hz is not None:
+        parametros_linea["frecuencia_hz"] = frecuencia_hz
+    if lambda_m is not None:
+        parametros_linea["lambda_m"] = lambda_m
+    if vp_m_s is not None:
+        parametros_linea["vp_m_s"] = vp_m_s
+    if vnp is not None:
+        parametros_linea["vnp"] = vnp
+    if longitud_total_m is not None:
+        parametros_linea["longitud_total_m"] = longitud_total_m
+    if distancias_fisicas:
+        parametros_linea["distancias_fisicas"] = distancias_fisicas
+    if roe_resistiva is not None:
+        parametros_linea["roe_resistiva"] = roe_resistiva
+    if cargas_resistivas_equivalentes is not None:
+        parametros_linea["cargas_resistivas_equivalentes"] = cargas_resistivas_equivalentes
+
+    return Z0, ZL, perfiles_config, parametros_linea
+
+
 
 # Función para calcular los parámetros asociados 
-def calcular_reflexion_y_parametros(Z0, ZL) -> dict[str, Any]:
+def calcular_reflexion_y_parametros(
+    Z0: complex,
+    ZL: complex,
+    datos_linea: Optional[Dict[str, Any]] = None
+) -> dict[str, Any]:
     """
-    Calcula la impedancia normalizada, coeficientes y parámetros asociados.
-    """
-    z_norm = ZL / Z0
-    # Evitar división por cero si z_norm es -1 exacto (ZL = -Z0)
-    if np.isclose(z_norm, -1):
-        gamma_L = complex(-1.0, 0.0)
-    else:
-        gamma_L = (z_norm - 1) / (z_norm + 1)
-        
-    gamma_num = ZL - Z0
-    gamma_den = ZL + Z0
+    Calcula todos los parámetros asociados a la carga, con soporte para:
 
-    gamma_mag = abs(gamma_L)
-    # Asegurar que la magnitud no exceda 1 por errores de punto flotante muy pequeños
+    - Carga general compleja (tipo_carga = 'general').
+    - Circuito abierto (tipo_carga = 'abierto'): Γ_L = +1 ∠0°, z_N = ∞.
+    - Cortocircuito (tipo_carga = 'corto'): Γ_L = -1 ∠180°, z_N = 0.
+    - ROE conocida con carga resistiva pura (tipo_carga = 'roe_resistiva'):
+        Se toma como ZL de referencia la solución en fase ZL1 = Z0·S,
+        pero se reportan también ZL1 y ZL2 = Z0/S en el diccionario.
+
+    Fórmulas usadas (ver Blake, 2004; Frenzel, 2003; HP App. Note 95-1):
+
+        z_N = ZL / Z0
+
+        Γ_L = (ZL - Z0)/(ZL + Z0)                 (carga general)
+        S   = (1 + |Γ_L|)/(1 - |Γ_L|)            (ROE)
+
+        |Γ|^2   = Γ_P = P_r / P_i
+        P_L/P_i = 1 - |Γ|^2
+
+        RL        = -20·log10(|Γ|)               (Return Loss > 0 dB)
+        α_RL      =  20·log10(|Γ|) = -RL        (pérdida de retorno, negativa)
+        L_mis     = -10·log10(1 - |Γ|^2)        (mismatch loss, > 0 dB)
+        α_des     =  10·log10(1 - |Γ|^2) = -L_mis  (pérdida de desacople, negativa)
+
+    Además calcula:
+        - Ángulos de Γ y τ = 1 + Γ.
+        - Parámetros de transmisión (P_trans, T_E, etc.).
+        - Z_in(0) en la carga (para general) y datos de línea (λ, Rem-LE, #camp. VROE).
+    """
+    tipo_carga = "general"
+    if datos_linea is not None:
+        tipo_carga = datos_linea.get("tipo_carga", "general")
+
+    # --- Determinar Γ_L y z_norm según el tipo de carga ---
+    gamma_L: complex
+    z_norm: complex
+    gamma_num: Optional[complex] = None
+    gamma_den: Optional[complex] = None
+
+    if tipo_carga == "abierto":
+        # Circuito abierto ideal: ZL = ∞, Γ_L = +1.
+        z_norm = complex(np.inf)
+        gamma_L = complex(1.0, 0.0)
+        gamma_mag = 1.0
+
+    elif tipo_carga == "corto":
+        # Cortocircuito ideal: ZL = 0, Γ_L = -1.
+        z_norm = 0.0 + 0.0j
+        gamma_L = complex(-1.0, 0.0)
+        gamma_mag = 1.0
+        gamma_num = ZL - Z0
+        gamma_den = ZL + Z0  # sólo por referencia, no se usa para el cálculo principal
+
+    elif tipo_carga == "roe_resistiva":
+        # ZL se tomó como ZL1 = Z0.real * S en leer_parametros_usuario().
+        # Aquí simplemente calculamos z_norm y Γ_L de manera estándar.
+        z_norm = ZL / Z0
+        if np.isclose(z_norm, -1):
+            gamma_L = complex(-1.0, 0.0)
+        else:
+            gamma_L = (z_norm - 1) / (z_norm + 1)
+        gamma_num = ZL - Z0
+        gamma_den = ZL + Z0
+        gamma_mag = abs(gamma_L)
+
+    else:
+        # Caso general: carga compleja arbitraria.
+        z_norm = ZL / Z0
+        if np.isclose(z_norm, -1):
+            gamma_L = complex(-1.0, 0.0)
+        else:
+            gamma_L = (z_norm - 1) / (z_norm + 1)
+        gamma_num = ZL - Z0
+        gamma_den = ZL + Z0
+        gamma_mag = abs(gamma_L)
+
+    # Asegurar que la magnitud esté en [0,1] por errores numéricos muy pequeños.
     if gamma_mag > 1.0 and np.isclose(gamma_mag, 1.0):
         gamma_mag = 1.0
-        
+
     gamma_ang_deg = _envolver_angulo_deg(np.degrees(np.angle(gamma_L)))
 
-    # Depuración: Manejo seguro de división por cero en SWR
+    # --- ROE (SWR) ---
     if np.isclose(gamma_mag, 1.0):
         SWR = np.inf
     else:
         SWR = (1 + gamma_mag) / (1 - gamma_mag)
 
-    # Manejo seguro de logaritmos
-    dBS = np.inf if not np.isfinite(SWR) else (20 * np.log10(SWR) if SWR > 0 else 0)
-    
-    with np.errstate(divide='ignore'):
+    dBS = np.inf if not np.isfinite(SWR) else (20 * np.log10(SWR) if SWR > 0 else 0.0)
+
+    # --- Parámetros de potencia y pérdidas ---
+    with np.errstate(divide='ignore', invalid='ignore'):
+        # Return Loss clásico (positivo)
         RL_dB = np.inf if np.isclose(gamma_mag, 0.0) else -20 * np.log10(gamma_mag)
+        # Coeficiente de reflexión en tensión (módulo y en dB)
+        Gamma_E = gamma_mag
         Gamma_E_dB = -np.inf if np.isclose(gamma_mag, 0.0) else 20 * np.log10(gamma_mag)
+        # Coeficiente de reflexión de potencia
+        Gamma_P = gamma_mag ** 2
+        # Potencia transmitida normalizada
+        P_trans = 1.0 - Gamma_P
+        # Mismatch loss (positivo)
+        if P_trans <= 1e-12:
+            RFL_LOSS_dB = np.inf
+        else:
+            RFL_LOSS_dB = -10.0 * np.log10(P_trans)
+        # Pérdida de retorno con signo negativo (como en las diapositivas)
+        alpha_RL_dB = -RL_dB if np.isfinite(RL_dB) else -np.inf
+        # Pérdida de desacople con signo negativo
+        alpha_des_dB = -RFL_LOSS_dB if np.isfinite(RFL_LOSS_dB) else -np.inf
+        # Atenuación equivalente (positiva) asociada a |Γ|
         ATTEN_dB = np.inf if np.isclose(gamma_mag, 0.0) else -20 * np.log10(gamma_mag)
 
-    Gamma_E = gamma_mag
-    Gamma_P = gamma_mag ** 2
-    P_trans = 1 - Gamma_P
+    # % de potencia reflejada y % de potencia absorbida (eficiencia de acople)
+    porcentaje_Pr = Gamma_P * 100.0
+    porcentaje_PL = P_trans * 100.0
 
-    if P_trans <= 1e-12:  # Umbral pequeño para cero
-        RFL_LOSS_dB = np.inf
-    else:
-        RFL_LOSS_dB = -10 * np.log10(P_trans)
-
+    # Coeficiente de pérdida por ROE F clásico
     if np.isfinite(SWR) and SWR > 0:
         SW_LOSS_COEFF = (1 + SWR**2) / (2 * SWR)
     else:
         SW_LOSS_COEFF = np.inf
-        
-    # Coeficiente de transmisión
-    T_P = P_trans
-    tau_L = 1 + gamma_L
+
+    # --- Coeficientes de transmisión ---
+    tau_L = 1.0 + gamma_L
     tau_ang_deg = _envolver_angulo_deg(np.degrees(np.angle(tau_L)))
     T_E_mag = abs(tau_L)
-    fase_coef_deg = gamma_ang_deg
-    
-    denom_gamma = 1 - gamma_L
+    fase_coef_deg = gamma_ang_deg  # se mantiene para compatibilidad
+
+    # --- Impedancia vista en la carga (Z_in en ℓ = 0) ---
+    denom_gamma = 1.0 - gamma_L
     if np.isclose(abs(denom_gamma), 0.0, atol=1e-12):
         Z_in_0 = complex(np.inf)
     else:
-        Z_in_0 = Z0 * (1 + gamma_L) / denom_gamma
+        Z_in_0 = Z0 * (1.0 + gamma_L) / denom_gamma
 
     resultados: dict[str, Any] = dict(
+        tipo_carga=tipo_carga,
         z_norm=z_norm,
         gamma_L=gamma_L,
         gamma_mag=gamma_mag,
@@ -228,14 +605,18 @@ def calcular_reflexion_y_parametros(Z0, ZL) -> dict[str, Any]:
         SWR=SWR,
         dBS=dBS,
         RL_dB=RL_dB,
+        alpha_RL_dB=alpha_RL_dB,
         Gamma_E=Gamma_E,
         Gamma_E_dB=Gamma_E_dB,
         Gamma_P=Gamma_P,
+        porcentaje_Pr=porcentaje_Pr,
+        porcentaje_PL=porcentaje_PL,
         RFL_LOSS_dB=RFL_LOSS_dB,
+        alpha_des_dB=alpha_des_dB,
         ATTEN_dB=ATTEN_dB,
         SW_LOSS_COEFF=SW_LOSS_COEFF,
         P_trans=P_trans,
-        T_P=T_P,
+        T_P=P_trans,
         tau_L=tau_L,
         tau_ang_deg=tau_ang_deg,
         T_E_mag=T_E_mag,
@@ -244,27 +625,127 @@ def calcular_reflexion_y_parametros(Z0, ZL) -> dict[str, Any]:
         gamma_den=gamma_den,
         perfiles_linea=[],
     )
+
+    # --- Copiar datos de línea básicos ---
+    if datos_linea:
+        for clave in (
+            "frecuencia_hz",
+            "lambda_m",
+            "vp_m_s",
+            "vnp",
+            "longitud_total_m",
+            "distancias_fisicas",
+            "roe_resistiva",
+            "cargas_resistivas_equivalentes",
+        ):
+            valor = datos_linea.get(clave)
+            if valor is not None:
+                resultados[clave] = valor
+
+    # --- Cálculo de Rem-LE y número de campanas VROE cuando hay L total y λ ---
+    lambda_m = resultados.get("lambda_m")
+    longitud_total_m = resultados.get("longitud_total_m")
+    if lambda_m is not None and longitud_total_m is not None and lambda_m > 0:
+        L_lambda = longitud_total_m / lambda_m
+        n_camp = int(np.floor(L_lambda))
+        rem_le = L_lambda - n_camp
+        resultados["L_total_lambda"] = L_lambda
+        resultados["N_camp_VROE"] = n_camp
+        resultados["Rem_LE_lambda"] = rem_le
+
     return resultados
 
-# Función para imprimir el procedimiento paso a paso 
+# ==== FUNCIÓN DE PROCEDIMIENTO ENRIQUECIDA CON FÓRMULAS ====
 def imprimir_procedimiento(Z0, ZL, resultados):
-    """Imprime en consola un resumen paso a paso con unidades y lo devuelve como texto."""
+    """
+    Imprime en consola un resumen paso a paso con unidades y lo devuelve como texto.
+
+    Incluye:
+        - % de potencia reflejada y absorbida.
+        - α_RL (negativa) y α_des (negativa).
+        - Rem-LE y # de campanas VROE cuando hay longitud total.
+        - Notación ZL′(ℓ) para las impedancias transformadas a lo largo de la línea.
+        - Fórmulas explícitas de cada parámetro.
+    """
     lineas: List[str] = []
     lineas.append("")
     lineas.append("=== Procedimiento paso a paso ===")
+
+    tipo_carga = resultados.get("tipo_carga", "general")
+
     lineas.append("1) Datos de entrada:")
+
     lineas.append(f"   Z0 = {_formatear_complejo_rectangular(Z0)} Ω")
-    lineas.append(f"   ZL = {_formatear_complejo_rectangular(ZL)} Ω")
 
+    if tipo_carga == "abierto":
+        lineas.append("   Carga: circuito abierto (ZL = ∞).")
+    elif tipo_carga == "corto":
+        lineas.append("   Carga: cortocircuito (ZL = 0 Ω).")
+    elif tipo_carga == "roe_resistiva":
+        roe_val = resultados.get("roe_resistiva")
+        cargas_equiv = resultados.get("cargas_resistivas_equivalentes")
+        lineas.append("   Carga: resistiva pura definida por ROE.")
+        if roe_val is not None:
+            lineas.append(f"   ROE (SWR) especificada = {roe_val:.3f}")
+        if cargas_equiv is not None:
+            ZL1, ZL2 = cargas_equiv
+            lineas.append(f"   ZL1 (en fase, ZL > Z0) ≈ {ZL1:.3f} Ω")
+            lineas.append(f"   ZL2 (contra fase, ZL < Z0) ≈ {ZL2:.3f} Ω")
+        lineas.append(f"   Para la carta se usa ZL1 como ZL de referencia: {ZL.real:.3f} Ω")
+    else:
+        lineas.append(f"   ZL = {_formatear_complejo_rectangular(ZL)} Ω")
+
+    frecuencia_hz = resultados.get("frecuencia_hz")
+    if frecuencia_hz is not None:
+        lineas.append(f"   f = {_formatear_frecuencia_hz(frecuencia_hz)}")
+
+    lambda_m = resultados.get("lambda_m")
+    vp_m_s = resultados.get("vp_m_s")
+    vnp = resultados.get("vnp")
+
+    if vp_m_s is not None and vnp is not None:
+        lineas.append(f"   v_p = {vp_m_s:.3e} m/s  (VNP = {vnp*100:.1f} % de c)")
+    if lambda_m is not None:
+        lineas.append(f"   λ (en la LT) = {_formatear_longitud_m(lambda_m, signo=False)}")
+
+    longitud_total_m = resultados.get("longitud_total_m")
+    if longitud_total_m is not None:
+        lineas.append(f"   Longitud física total de la línea = {_formatear_longitud_m(longitud_total_m, signo=False)}")
+
+    distancias_fisicas = resultados.get("distancias_fisicas")
+    if distancias_fisicas:
+        dist_texto = ", ".join(f"{valor:+.4f}" for valor in distancias_fisicas)
+        lineas.append(f"   Distancias físicas solicitadas d = {dist_texto} m")
+
+    # Rem-LE y número de campanas VROE
+    L_lambda = resultados.get("L_total_lambda")
+    N_camp = resultados.get("N_camp_VROE")
+    Rem_LE_lambda = resultados.get("Rem_LE_lambda")
+    if L_lambda is not None and N_camp is not None and Rem_LE_lambda is not None:
+        lineas.append(f"   Longitud total en longitudes de onda: L/λ = {L_lambda:.3f}")
+        lineas.append(f"   Número de campanas VROE ≈ {N_camp}")
+        lineas.append(f"   Rem-LE (remanente eléctrico) = {Rem_LE_lambda:.3f} λ")
+
+    # 2) Impedancia normalizada
     z_norm = resultados["z_norm"]
+    lineas.append("")
     lineas.append("2) Impedancia normalizada z_N = ZL / Z0:")
-    lineas.append(f"   z_N = {z_norm.real:.2f} + j{z_norm.imag:.2f} (adimensional)")
+    lineas.append("   Fórmula: z_N = ZL / Z0")
+    if np.isfinite(z_norm.real) or np.isfinite(z_norm.imag):
+        lineas.append(f"   z_N = {z_norm.real:.2f} + j{z_norm.imag:.2f} (adimensional)")
+    else:
+        lineas.append("   z_N = ∞ (circuito abierto ideal)")
 
+    # 3) Coeficiente de reflexión en la carga
     gamma_L = resultados["gamma_L"]
-    lineas.append("3) Coeficiente de reflexión en la carga:")
+    lineas.append("")
+    lineas.append("3) Coeficiente de reflexión en la carga Γ_L:")
+    lineas.append("   Fórmula general: Γ_L = (ZL − Z0) / (ZL + Z0)")
+    lineas.append("   |Γ_L| = √[(Re{Γ_L})² + (Im{Γ_L})²]")
+    lineas.append("   ∠Γ_L = atan2(Im{Γ_L}, Re{Γ_L})")
     gamma_num = resultados.get("gamma_num")
     gamma_den = resultados.get("gamma_den")
-    if gamma_num is not None and gamma_den is not None:
+    if gamma_num is not None and gamma_den is not None and np.isfinite(gamma_num.real):
         lineas.append(
             f"   Numerador (ZL − Z0) = {gamma_num.real:.2f} + j{gamma_num.imag:.2f} Ω"
         )
@@ -272,41 +753,64 @@ def imprimir_procedimiento(Z0, ZL, resultados):
             f"   Denominador (ZL + Z0) = {gamma_den.real:.2f} + j{gamma_den.imag:.2f} Ω"
         )
     lineas.append(
-        f"   Γ_L = (ZL − Z0) / (ZL + Z0) = {gamma_L.real:.2f} + j{gamma_L.imag:.2f}"
+        f"   Γ_L = {gamma_L.real:.2f} + j{gamma_L.imag:.2f}"
     )
-    lineas.append(f"   |Γ_L| = {resultados['gamma_mag']:.2f} (adimensional)")
+    lineas.append(f"   |Γ_L| = {resultados['gamma_mag']:.3f} (adimensional)")
     lineas.append(f"   ∠Γ_L = {resultados['gamma_ang_deg']:.2f} °")
-    lineas.append(f"   Ángulo de fase equivalente (coef. de fase) = {resultados['fase_coef_deg']:.2f} °")
 
+    # 4) Parámetros derivados basados en |Γ_L|
+    lineas.append("")
     lineas.append("4) Parámetros derivados basados en |Γ_L|:")
-    lineas.append(f"   ROE (SWR) = {resultados['SWR']:.2f} (adimensional)")
-    lineas.append(f"   ROE en dB (dBS) = {resultados['dBS']:.2f} dB")
-    lineas.append(f"   Atenuación equivalente = {resultados['ATTEN_dB']:.2f} dB")
-    lineas.append(f"   Coef. pérdida por ROE = {resultados['SW_LOSS_COEFF']:.2f} (adimensional)")
-    lineas.append(f"   Pérdida de retorno = {resultados['RL_dB']:.2f} dB")
-    lineas.append(f"   Coef. reflexión potencia |Γ|² = {resultados['Gamma_P']:.2f} (adimensional)")
-    lineas.append(f"   Pérdida por desajuste = {resultados['RFL_LOSS_dB']:.2f} dB")
-    lineas.append(f"   Coef. reflexión |Γ| = {resultados['Gamma_E']:.2f} (adimensional)")
+    lineas.append("   Fórmula ROE: S = (1 + |Γ_L|) / (1 − |Γ_L|)")
+    lineas.append("   Fórmula RL: RL = −20·log10(|Γ_L|)")
+    lineas.append("   Fórmula |Γ|²: |Γ|² = P_r / P_i")
+    lineas.append("   Fórmula L_mis: L_mis = −10·log10(1 − |Γ|²)")
+    lineas.append("   Fórmula α_des: α_des = −L_mis")
+    lineas.append(f"   ROE (SWR) = {resultados['SWR']:.3f} (adimensional)")
+    lineas.append(f"   ROE en dB (dBS) = {resultados['dBS']:.3f} dB")
+    lineas.append(f"   Coef. reflexión |Γ| = {resultados['Gamma_E']:.3f} (adimensional)")
+    lineas.append(f"   Coef. reflexión en dB = {resultados['Gamma_E_dB']:.3f} dB")
+    lineas.append(f"   Coef. reflexión de potencia |Γ|² = {resultados['Gamma_P']:.4f} (adimensional)")
+    lineas.append(f"   % Potencia reflejada = {resultados['porcentaje_Pr']:.2f} %")
+    lineas.append(f"   % Potencia absorbida (η, eficiencia de acople) = {resultados['porcentaje_PL']:.2f} %")
+    lineas.append(f"   Pérdida de retorno RL (positiva) = {resultados['RL_dB']:.3f} dB")
+    lineas.append(f"   Pérdida de retorno α_RL (negativa) = {resultados['alpha_RL_dB']:.3f} dB")
+    lineas.append(f"   Pérdida por desajuste L_mis (positiva) = {resultados['RFL_LOSS_dB']:.3f} dB")
+    lineas.append(f"   Pérdida de desacople α_des (negativa) = {resultados['alpha_des_dB']:.3f} dB")
+    lineas.append(f"   Coef. pérdida por ROE F = {resultados['SW_LOSS_COEFF']:.3f} (adimensional)")
+    lineas.append(f"   Atenuación equivalente asociada a |Γ| = {resultados['ATTEN_dB']:.3f} dB")
 
+    # 5) Parámetros de transmisión
+    lineas.append("")
     lineas.append("5) Parámetros de transmisión:")
-    lineas.append(f"   Potencia transmitida normalizada = {resultados['P_trans']:.2f} (adimensional)")
-    lineas.append(f"   Coef. transmisión de potencia = {resultados['T_P']:.2f} (adimensional)")
-    lineas.append(f"   |Coef. transmisión de tensión| = {resultados['T_E_mag']:.2f} (adimensional)")
-    lineas.append(f"   ∠(1 + Γ_L) (ángulo del coef. de transmisión) = {resultados['tau_ang_deg']:.2f} °")
-    
+    lineas.append("   Fórmula T_P: T_P = P_L / P_i = 1 − |Γ|²")
+    lineas.append("   Fórmula τ_L: τ_L = 1 + Γ_L")
+    lineas.append(f"   Potencia transmitida normalizada P_L/P_i = {resultados['P_trans']:.4f}")
+    lineas.append(f"   Coef. transmisión de potencia T_P = {resultados['T_P']:.4f}")
+    lineas.append(f"   |Coef. transmisión de tensión| = {resultados['T_E_mag']:.3f}")
+    lineas.append(f"   ∠(1 + Γ_L) (ángulo del coef. de transmisión τ_L) = {resultados['tau_ang_deg']:.2f} °")
+
+    # 6) Impedancia vista en la carga
     Zi0 = resultados.get("Z_in_0")
+    lineas.append("")
+    lineas.append("6) Impedancia vista en la carga (ℓ = 0):")
+    lineas.append("   Fórmula general: Z_in(0) = Z0 · (1 + Γ_L) / (1 − Γ_L)")
     if Zi0 is not None:
         if isinstance(Zi0, complex) and np.isfinite(Zi0):
             lineas.append(
                 "   Z_in(0) = "
-                f"{_formatear_complejo_rectangular(Zi0)} Ω (impedancia vista en la carga)"
+                f"{_formatear_complejo_rectangular(Zi0)} Ω"
             )
         else:
-            lineas.append("   Z_in(0) = ∞ (impedancia vista en la carga)")
-    
+            lineas.append("   Z_in(0) = ∞ (circuito abierto ideal).")
+
+    # 7) Desplazamientos a lo largo de la línea (ZL′)
     perfiles = resultados.get("perfiles_linea", [])
     if perfiles:
-        lineas.append("6) Desplazamientos a lo largo de la línea:")
+        lineas.append("")
+        lineas.append("7) Desplazamientos a lo largo de la línea (ZL′(ℓ)):")
+        lineas.append("   Fórmula general: Γ(ℓ) = Γ_L · e^{-j4πℓ}")
+        lineas.append("   Fórmula ZL′(ℓ): ZL′(ℓ) = Z0 · (1 + Γ(ℓ)) / (1 − Γ(ℓ))")
         for perfil in perfiles:
             sentido = perfil["direccion"]
             longitud_eq = perfil.get("longitud", 0.0)
@@ -340,18 +844,37 @@ def imprimir_procedimiento(Z0, ZL, resultados):
             if Zi is not None:
                 if isinstance(Zi, complex) and np.isfinite(Zi):
                     lineas.append(
-                        f"     Z_in(ℓ) = {_formatear_complejo_rectangular(Zi)} Ω (impedancia vista)"
+                        f"     ZL′(ℓ) = {_formatear_complejo_rectangular(Zi)} Ω (impedancia equivalente vista en ese punto)"
                     )
                     lineas.append(
-                        f"     R_in(ℓ) = {Zi.real:.2f} Ω, X_in(ℓ) = {Zi.imag:.2f} Ω"
+                        f"     R′(ℓ) = {Zi.real:.2f} Ω, X′(ℓ) = {Zi.imag:.2f} Ω"
                     )
                 else:
-                    lineas.append("     Z_in(ℓ) = ∞ (impedancia vista)")
+                    lineas.append("     ZL′(ℓ) = ∞ (equivalente a circuito abierto).")
+
+            distancia_m = perfil.get("distancia_m")
+            if distancia_m is not None:
+                lineas.append(f"     d ingresada = {distancia_m:+.4f} m")
+
+            long_eq_m = perfil.get("longitud_fisica_equivalente_m")
+            if long_eq_m is not None:
+                lineas.append(f"     ℓ equivalente ≈ {long_eq_m:+.4f} m")
+
+            long_in_m = perfil.get("longitud_fisica_original_m")
+            if long_in_m is not None and (distancia_m is None or not np.isclose(long_in_m, distancia_m)):
+                lineas.append(f"     ℓ ingresada ≈ {long_in_m:+.4f} m")
+
+            if perfil.get("fuente"):
+                lineas.append(f"     Fuente declarada: {perfil['fuente']}")
+
+    lineas.append("")
     lineas.append("=== Fin del resumen ===")
 
     texto = "\n".join(lineas)
     print(texto)
     return texto
+
+
 
 # Función para determinar la orientación del texto circular
 def _ajustar_rotacion_tangencial(angulo_deg: float) -> float:
@@ -406,15 +929,73 @@ def texto_en_arco(ax, texto: str, radio: float, angulo_centro_deg: float, ancho_
         ha, va, rot = _orientacion_texto_circular(x, y)
         ax.text(x, y, ch, ha=ha, va=va, rotation=rot, rotation_mode='anchor', **kwargs)
 
+
+def _mostrar_procedimiento_scrolleable(procedimiento_texto: str, texto_leyenda: str) -> None:
+    """Muestra el procedimiento en una ventana con scroll; si falla, recurre a Matplotlib."""
+    contenido = procedimiento_texto + ("\n\n" + texto_leyenda if texto_leyenda else "")
+
+    try:
+        import tkinter as tk
+        from tkinter import scrolledtext
+    except Exception:
+        _mostrar_procedimiento_fallback(contenido)
+        return
+
+    try:
+        root = getattr(tk, "_default_root", None)
+        if root is None:
+            root = tk.Tk()
+            root.withdraw()
+
+        ventana = tk.Toplevel(root)
+        ventana.title("Procedimiento paso a paso")
+        ventana.geometry("720x780")
+        ventana.minsize(500, 400)
+
+        widget = scrolledtext.ScrolledText(
+            ventana,
+            wrap=tk.WORD,
+            font=("Consolas", 10),
+            padx=10,
+            pady=10,
+        )
+        widget.pack(fill="both", expand=True)
+        widget.insert("1.0", contenido)
+        widget.configure(state="disabled")
+        ventana.focus_force()
+    except Exception:
+        _mostrar_procedimiento_fallback(contenido)
+
+
+def _mostrar_procedimiento_fallback(contenido: str) -> None:
+    """Reproduce el comportamiento original basado en Matplotlib."""
+    fig = plt.figure(figsize=(7, 8))
+    fig.suptitle("Procedimiento paso a paso", fontsize=11)
+    ax = fig.add_subplot(1, 1, 1)
+    ax.axis('off')
+    ax.text(0.01, 0.98, contenido, ha='left', va='top', fontsize=9, wrap=True)
+    fig.subplots_adjust(left=0.05, right=0.95, top=0.93, bottom=0.05)
+
 # Función para calcular perfiles a lo largo de la línea 
-def _calcular_perfiles_desplazamiento(gamma_L: complex, desplazamientos: List[float], Z0):
-    """Genera los perfiles de Γ, τ y la impedancia vista Z_in a lo largo de la línea."""
+def _calcular_perfiles_desplazamiento(
+    gamma_L: complex,
+    desplazamientos: List[Any],
+    Z0,
+    lambda_m: Optional[float] = None,
+):
+    """Genera los perfiles de Γ, τ y Z_in a lo largo de la línea para cada entrada."""
     perfiles = []
     HALF_LAMBDA = 0.5
     TOL = 1e-9
     
-    for desplazamiento in desplazamientos:
-        desplazamiento = float(desplazamiento)
+    for entrada in desplazamientos:
+        if isinstance(entrada, dict):
+            desplazamiento = float(entrada.get("longitud_norm", 0.0))
+            info_extra = entrada
+        else:
+            desplazamiento = float(entrada)
+            info_extra = {}
+
         num_medios = int(np.floor((abs(desplazamiento) + TOL) / HALF_LAMBDA))
         ajuste_total = 0.0
         remanente = desplazamiento
@@ -454,7 +1035,95 @@ def _calcular_perfiles_desplazamiento(gamma_L: complex, desplazamientos: List[fl
             ajuste_total_lambda=ajuste_total,
             longitud_equivalente=remanente,
         ))
+        perfil_actual = perfiles[-1]
+
+        if lambda_m is not None:
+            perfil_actual["lambda_m"] = lambda_m
+            perfil_actual["longitud_fisica_original_m"] = desplazamiento * lambda_m
+            perfil_actual["longitud_fisica_equivalente_m"] = remanente * lambda_m
+            perfil_actual["remanente_fisico_m"] = remanente * lambda_m
+            perfil_actual["ajuste_total_m"] = ajuste_total * lambda_m
+
+        distancia_m = info_extra.get("distancia_m") if isinstance(info_extra, dict) else None
+        if distancia_m is not None:
+            perfil_actual["distancia_m"] = distancia_m
+        elif lambda_m is not None:
+            perfil_actual["distancia_m"] = desplazamiento * lambda_m
+
+        if isinstance(info_extra, dict) and info_extra.get("fuente"):
+            perfil_actual["fuente"] = info_extra["fuente"]
+
     return perfiles
+
+# Función auxiliar para detallar longitudes desplazadas
+def _detallar_perfil_longitud(idx: int, perfil: dict[str, Any]) -> Tuple[str, str, str]:
+    """Genera textos consistentes para anotaciones y tooltips de una longitud eléctrica."""
+    sentido = perfil.get("direccion", "")
+    longitud_eq = perfil.get("longitud", 0.0)
+    longitud_in = perfil.get("longitud_original", longitud_eq)
+    vueltas_medios = perfil.get("vueltas_lambda_media", 0)
+    ajuste_total = perfil.get("ajuste_total_lambda", 0.0)
+    Zi = perfil.get("Zi")
+    angulo = perfil.get("gamma_ang_deg")
+
+    titulo = f"Longitud eléctrica #{idx}"
+
+    etiqueta_lineas: List[str] = []
+    tooltip_lineas: List[str] = [titulo]
+
+    linea_longitud = f"ℓ{idx} = {longitud_eq:+.2f} λ"
+    if not np.isclose(longitud_in, longitud_eq):
+        linea_longitud += f" (eq. de {longitud_in:+.2f} λ)"
+    etiqueta_lineas.append(linea_longitud)
+    tooltip_lineas.append(linea_longitud)
+
+    if sentido:
+        tooltip_lineas.append(f"Dirección: {sentido}")
+
+    if vueltas_medios:
+        linea_ajuste = f"Δℓ = {ajuste_total:+.2f} λ ({vueltas_medios} × 0.5λ)"
+        etiqueta_lineas.append(linea_ajuste)
+        tooltip_lineas.append(linea_ajuste)
+
+    long_eq_m = perfil.get("longitud_fisica_equivalente_m")
+    if long_eq_m is not None:
+        linea_eq_m = f"ℓ eq ≈ {_formatear_longitud_m(long_eq_m)}"
+        etiqueta_lineas.append(linea_eq_m)
+        tooltip_lineas.append(linea_eq_m)
+
+    dist_m = perfil.get("distancia_m")
+    if dist_m is not None:
+        tooltip_lineas.append(f"d ingresada ≈ {_formatear_longitud_m(dist_m)}")
+
+    long_in_m = perfil.get("longitud_fisica_original_m")
+    if long_in_m is not None and (dist_m is None or not np.isclose(long_in_m, dist_m)):
+        tooltip_lineas.append(f"ℓ ingresada ≈ {_formatear_longitud_m(long_in_m)}")
+
+    remanente_m = perfil.get("remanente_fisico_m")
+    if remanente_m is not None and vueltas_medios:
+        tooltip_lineas.append(f"Remanente ≈ {_formatear_longitud_m(remanente_m)}")
+
+    if isinstance(Zi, complex) and np.isfinite(Zi):
+        zi_txt = _formatear_complejo_rectangular(Zi)
+    else:
+        zi_txt = "∞"
+    etiqueta_lineas.append(f"ZL′ = {zi_txt} Ω")
+    tooltip_lineas.append(f"ZL′ (impedancia equivalente) = {zi_txt} Ω")
+
+
+    if angulo is not None:
+        etiqueta_lineas.append(f"∠Γ = {angulo:.2f}°")
+        tooltip_lineas.append(f"∠Γ = {angulo:.2f}°")
+
+    fuente = perfil.get("fuente")
+    if fuente:
+        tooltip_lineas.append(f"Fuente: {fuente}")
+
+    tooltip_unico = "\n".join(dict.fromkeys(tooltip_lineas))
+    etiqueta_texto = "\n".join(etiqueta_lineas)
+
+    return titulo, etiqueta_texto, tooltip_unico
+
 
 # Función para dibujar la escala de ángulos 
 def _dibujar_escala_angulos(ax):
@@ -534,7 +1203,12 @@ def _marcar_angulos_coeficientes(ax, angulo_reflexion_deg: Optional[float], angu
         ax.text(x_txt, y_txt, etiqueta, fontsize=7, color=color, ha=ha, va=va, zorder=6)
         
         marcadores.append(dict(
-            nombre=nombre, angulo_deg=angulo_deg, posicion=(x, y), color=color, radio_det=0.05,
+            nombre=nombre,
+            angulo_deg=angulo_deg,
+            posicion=(x, y),
+            color=color,
+            radio_det=0.05,
+            tooltip=f"{nombre}: {angulo_deg:.2f}°",
         ))
 
     _dibujar_marcador(angulo_reflexion_deg, ESCALA_ANGULO_INTERNA, 'tab:green', 0.08, "Ángulo de reflexión")
@@ -566,25 +1240,7 @@ def _dibujar_longitudes_electricas(ax, perfiles_linea: List[dict[str, Any]]) -> 
                 markeredgecolor='white', markeredgewidth=1.0,
                 linestyle='None', zorder=6)
 
-        sentido = perfil.get("direccion", "")
-        longitud_eq = perfil.get("longitud", 0.0)
-        longitud_in = perfil.get("longitud_original", longitud_eq)
-        vueltas_medios = perfil.get("vueltas_lambda_media", 0)
-        ajuste_total = perfil.get("ajuste_total_lambda", 0.0)
-        Zi = perfil.get("Zi")
-
-        if vueltas_medios:
-            encabezado = (
-                f"ℓ{idx} = {longitud_eq:+.2f} λ (eq. de {longitud_in:+.2f} λ)\n"
-                f"Δℓ = {ajuste_total:+.2f} λ ({vueltas_medios} × 0.5λ)"
-            )
-        else:
-            encabezado = f"ℓ{idx} = {longitud_eq:+.2f} λ"
-
-        if isinstance(Zi, complex) and np.isfinite(Zi):
-            etiqueta = f"{encabezado}\nZ_in = {_formatear_complejo_rectangular(Zi)} Ω"
-        else:
-            etiqueta = f"{encabezado}\nZ_in = ∞"
+        titulo, etiqueta, tooltip = _detallar_perfil_longitud(idx, perfil)
 
         norma = np.hypot(x, y)
         if np.isclose(norma, 0.0):
@@ -610,17 +1266,23 @@ def _dibujar_longitudes_electricas(ax, perfiles_linea: List[dict[str, Any]]) -> 
         )
 
         marcadores.append(dict(
-            nombre=f"Longitud eléctrica #{idx}",
+            nombre=titulo,
             etiqueta=etiqueta,
+            tooltip=tooltip,
             posicion=(x, y),
             posicion_texto=(punto_texto[0], punto_texto[1]),
-            direccion=sentido,
+            direccion=perfil.get("direccion", ""),
             angulo=perfil.get("gamma_ang_deg"),
-            longitud=longitud_eq,
-            longitud_original=longitud_in,
-            vueltas_lambda_media=vueltas_medios,
-            ajuste_total_lambda=ajuste_total,
-            Zi=Zi,
+            angulo_deg=perfil.get("gamma_ang_deg"),
+            longitud=perfil.get("longitud", 0.0),
+            longitud_original=perfil.get("longitud_original", 0.0),
+            vueltas_lambda_media=perfil.get("vueltas_lambda_media", 0),
+            ajuste_total_lambda=perfil.get("ajuste_total_lambda", 0.0),
+            Zi=perfil.get("Zi"),
+            distancia_m=perfil.get("distancia_m"),
+            longitud_fisica_equivalente_m=perfil.get("longitud_fisica_equivalente_m"),
+            longitud_fisica_original_m=perfil.get("longitud_fisica_original_m"),
+            fuente=perfil.get("fuente"),
             radio_det=0.05,
         ))
 
@@ -914,23 +1576,47 @@ def dibujar_regletas(ax, resultados):
             ha='center', va='top', fontsize=9, transform=ax.transAxes)
 
 # === NUEVAS FUNCIONES: texto estático con “datos de hover” para exportación ===
-
 def _formato_valores_estatico(Z0, ZL, resultados) -> str:
     """Texto equivalente al mostrado en el hover principal de Γ_L."""
     gamma_L = resultados["gamma_L"]
     z = resultados["z_norm"]
-    lineas = [
-        f"Z0 = {_formatear_complejo_rectangular(Z0)} Ω",
-        f"ZL = {_formatear_complejo_rectangular(ZL)} Ω",
+    tipo_carga = resultados.get("tipo_carga", "general")
+
+    cabecera = []
+    if tipo_carga == "abierto":
+        cabecera.append("Carga: CTO. ABIERTO (ZL = ∞)")
+    elif tipo_carga == "corto":
+        cabecera.append("Carga: CTO. (ZL = 0 Ω)")
+    elif tipo_carga == "roe_resistiva":
+        cabecera.append("Carga: resistiva pura definida por ROE")
+    else:
+        cabecera.append(f"ZL = {_formatear_complejo_rectangular(ZL)} Ω")
+
+    lineas = cabecera + [
+        f"Z0  = {_formatear_complejo_rectangular(Z0)} Ω",
         f"z_N = {z.real:.2f} + j{z.imag:.2f}",
         f"Γ_L = {gamma_L.real:.2f} + j{gamma_L.imag:.2f}",
-        f"|Γ_L| = {resultados['gamma_mag']:.2f}",
+        f"|Γ_L| = {resultados['gamma_mag']:.3f}",
         f"∠Γ_L = {resultados['gamma_ang_deg']:.2f}°",
-        f"ROE = {resultados['SWR']:.2f}",
-        f"RL = {resultados['RL_dB']:.2f} dB",
+        f"ROE = {resultados['SWR']:.3f}",
+        f"RL = {resultados['RL_dB']:.3f} dB",
+        f"α_RL = {resultados['alpha_RL_dB']:.3f} dB",
+        f"%Pr = {resultados['porcentaje_Pr']:.2f} %",
+        f"η = {resultados['porcentaje_PL']:.2f} % (PL/Pi)",
+        f"α_des = {resultados['alpha_des_dB']:.3f} dB",
     ]
+
+    frecuencia_hz = resultados.get("frecuencia_hz")
+    if frecuencia_hz is not None:
+        lineas.append(f"f = {_formatear_frecuencia_hz(frecuencia_hz)}")
+
+    lambda_m = resultados.get("lambda_m")
+    if lambda_m is not None:
+        lineas.append(f"λ = {_formatear_longitud_m(lambda_m, signo=False)}")
+
     return "\n".join(lineas)
 
+# Función para anotar Γ_L en la exportación
 def _anotar_gamma_principal_export(ax, Z0, ZL, resultados):
     """Dibuja, en la carta exportada, el cuadro con los datos de Γ_L como si fuera hover."""
     gamma_L = resultados["gamma_L"]
@@ -961,6 +1647,7 @@ def _anotar_gamma_principal_export(ax, Z0, ZL, resultados):
         zorder=10,
     )
 
+# Función para dibujar longitudes eléctricas en la exportación
 def _dibujar_longitudes_electricas_export(ax, perfiles_linea: List[dict[str, Any]]):
     """
     Dibuja para exportación:
@@ -984,22 +1671,7 @@ def _dibujar_longitudes_electricas_export(ax, perfiles_linea: List[dict[str, Any
                 markeredgecolor='white', markeredgewidth=1.0,
                 linestyle='None', zorder=6)
 
-        Zi = perfil.get("Zi")
-        if isinstance(Zi, complex) and np.isfinite(Zi):
-            zi_txt = _formatear_complejo_rectangular(Zi)
-        else:
-            zi_txt = "∞"
-
-        ang = perfil.get("gamma_ang_deg", 0.0)
-        longitud = perfil.get("longitud", 0.0)
-
-        lineas = [
-            f"Longitud eléctrica #{idx}",
-            f"ℓ = {longitud:+.2f} λ",
-            f"Zi = {zi_txt} Ω",
-            f"∠Γ = {ang:.2f}°",
-        ]
-        texto = "\n".join(lineas)
+        _, _, tooltip = _detallar_perfil_longitud(idx, perfil)
 
         norma = np.hypot(x, y)
         if np.isclose(norma, 0.0):
@@ -1014,7 +1686,7 @@ def _dibujar_longitudes_electricas_export(ax, perfiles_linea: List[dict[str, Any
         va = 'bottom' if punto_texto[1] >= 0 else 'top'
 
         ax.annotate(
-            texto,
+            tooltip,
             xy=(x, y),
             xytext=(punto_texto[0], punto_texto[1]),
             textcoords='data',
@@ -1026,11 +1698,18 @@ def _dibujar_longitudes_electricas_export(ax, perfiles_linea: List[dict[str, Any
             zorder=9,
         )
 
-# === FUNCIÓN DE EXPORTACIÓN: CARTA SOLA CON DATOS “DE HOVER” IMPRESOS ===
-
-def exportar_carta_smith_sola(Z0, ZL, resultados, perfiles_linea,
-                              nombre_base: str = "smithchart_sola",
-                              formato: str = "svg", dpi: int = 600) -> None:
+# ==== FUNCIÓN DE EXPORTACIÓN ACTUALIZADA (PDF 2 PÁGINAS) ====
+def exportar_carta_smith_sola(
+    Z0,
+    ZL,
+    resultados,
+    perfiles_linea,
+    nombre_base: str = "smithchart_sola",
+    formato: str = "svg",
+    dpi: int = 600,
+    procedimiento_texto: Optional[str] = None,   # NUEVO
+    texto_leyenda: Optional[str] = None          # NUEVO
+) -> None:
     """
     Genera una figura separada únicamente con la carta de Smith (sin regletas)
     y la guarda en formato vectorial (SVG/PDF) o PNG de alta resolución.
@@ -1038,6 +1717,11 @@ def exportar_carta_smith_sola(Z0, ZL, resultados, perfiles_linea,
     EN ESTA FIGURA:
       - El punto Γ_L tiene impreso el cuadro con los mismos datos que el hover.
       - Cada longitud eléctrica tiene su cuadro con ℓ, Zi y ∠Γ.
+
+    Si formato='pdf' y se proporciona procedimiento_texto, se genera
+    un PDF de dos páginas:
+      * Página 1: carta de Smith.
+      * Página 2: procedimiento paso a paso + leyenda.
     """
     gamma_L = resultados["gamma_L"]
     gamma_mag = resultados["gamma_mag"]
@@ -1067,6 +1751,38 @@ def exportar_carta_smith_sola(Z0, ZL, resultados, perfiles_linea,
 
     ruta = f"{nombre_base}.{formato}"
 
+    # Si es PDF y hay procedimiento, hacer PDF multipágina
+    if formato == "pdf" and procedimiento_texto:
+        with PdfPages(ruta) as pdf:
+            # Página 1: carta de Smith
+            pdf.savefig(fig2, bbox_inches='tight')
+            plt.close(fig2)
+
+            # Página 2: procedimiento paso a paso
+            fig_proc = plt.figure(figsize=(7, 8), constrained_layout=True)
+            fig_proc.suptitle("Procedimiento paso a paso", fontsize=11)
+            ax_proc = fig_proc.add_subplot(1, 1, 1)
+            ax_proc.axis('off')
+
+            texto_final = procedimiento_texto
+            if texto_leyenda:
+                texto_final = texto_final + "\n\n" + texto_leyenda
+
+            ax_proc.text(
+                0.01,
+                0.98,
+                texto_final,
+                ha='left',
+                va='top',
+                fontsize=9,
+                wrap=True
+            )
+            pdf.savefig(fig_proc, bbox_inches='tight')
+            plt.close(fig_proc)
+        print(f"Carta de Smith + procedimiento guardados en '{ruta}' (PDF multipágina).")
+        return
+
+    # Comportamiento original para SVG/PNG (solo imagen)
     kwargs: dict[str, Any] = dict(bbox_inches='tight')
     if formato == "png":
         kwargs["dpi"] = dpi
@@ -1075,16 +1791,25 @@ def exportar_carta_smith_sola(Z0, ZL, resultados, perfiles_linea,
     plt.close(fig2)
     print(f"Carta de Smith sola guardada en '{ruta}' ({formato.upper()}).")
 
-# === FUNCIÓN PRINCIPAL CON FIGURA INTERACTIVA + REGLETAS + HOVER ===
-
-def crear_grafica_completa(Z0, ZL, desplazamientos: Optional[List[float]] = None):
+# Función principal para crear la gráfica completa 
+def crear_grafica_completa(
+    Z0,
+    ZL,
+    perfiles_config: Optional[List[Any]] = None,
+    parametros_linea: Optional[Dict[str, Any]] = None,
+):
     """Genera la figura completa con hover y regletas."""
-    if desplazamientos is None:
-        desplazamientos = []
-    
-    resultados = calcular_reflexion_y_parametros(Z0, ZL)
-    perfiles_linea = _calcular_perfiles_desplazamiento(resultados["gamma_L"],
-                                                       desplazamientos, Z0)
+    if perfiles_config is None:
+        perfiles_config = []
+
+    resultados = calcular_reflexion_y_parametros(Z0, ZL, parametros_linea)
+    lambda_m = resultados.get("lambda_m")
+    perfiles_linea = _calcular_perfiles_desplazamiento(
+        resultados["gamma_L"],
+        perfiles_config,
+        Z0,
+        lambda_m=lambda_m,
+    )
     resultados["perfiles_linea"] = perfiles_linea
     procedimiento_texto = imprimir_procedimiento(Z0, ZL, resultados)
     
@@ -1136,13 +1861,8 @@ def crear_grafica_completa(Z0, ZL, desplazamientos: Optional[List[float]] = None
         "• Círculo de impedancia: borde |Γ| = 1 que delimita la carta y define el mapa de impedancias normalizadas."
     )
     
-    fig_procedimiento = plt.figure(figsize=(7, 8), constrained_layout=True)
-    fig_procedimiento.suptitle("Procedimiento paso a paso", fontsize=11)
-    ax_proc = fig_procedimiento.add_subplot(1, 1, 1)
-    ax_proc.axis('off')
-    ax_proc.text(0.01, 0.98,
-                 procedimiento_texto + "\n\n" + texto_leyenda,
-                 ha='left', va='top', fontsize=9, wrap=True)
+    # Figura de procedimiento para ver en pantalla (independiente del PDF)
+    _mostrar_procedimiento_scrolleable(procedimiento_texto, texto_leyenda)
 
     anot = ax_smith.annotate(
         "", xy=(0, 0), xytext=(18, 18), textcoords="offset points",
@@ -1153,14 +1873,21 @@ def crear_grafica_completa(Z0, ZL, desplazamientos: Optional[List[float]] = None
     )
     anot.set_visible(False)
 
+    # Función para obtener el renderer actual de la figura
     def obtener_renderer() -> Optional[RendererBase]:
-        renderer = getattr(fig.canvas, "get_renderer", None)
-        if callable(renderer):
-            renderer = renderer()
-        if renderer is None:
-            renderer = getattr(fig.canvas, "renderer", None)
-        return renderer
+        candidato = getattr(fig.canvas, "get_renderer", None)
+        if callable(candidato):
+            candidato = candidato()
+        if isinstance(candidato, RendererBase):
+            return candidato
 
+        candidato = getattr(fig.canvas, "renderer", None)
+        if isinstance(candidato, RendererBase):
+            return candidato
+
+        return None
+
+    # Función para ajustar la anotación a los bordes del eje destino
     def ajustar_a_bordes(eje_destino):
         renderer = obtener_renderer()
         if renderer is None:
@@ -1189,6 +1916,7 @@ def crear_grafica_completa(Z0, ZL, desplazamientos: Optional[List[float]] = None
             escala = 72.0 / fig.dpi
             anot.set_position((px + delta_x * escala, py + delta_y * escala))
     
+    # Función para configurar la posición de la anotación según el eje destino
     def configurar_anotacion(eje_destino, base_point: Optional[Tuple[float, float]] = None):
         if eje_destino is ax_smith:
             if base_point is None:
@@ -1205,6 +1933,7 @@ def crear_grafica_completa(Z0, ZL, desplazamientos: Optional[List[float]] = None
         anot.set_horizontalalignment(ha)
         anot.set_verticalalignment(va)
 
+    # Función para formatear los valores mostrados en el hover
     def formato_valores():
         z = resultados["z_norm"]
         lineas = [
@@ -1217,6 +1946,15 @@ def crear_grafica_completa(Z0, ZL, desplazamientos: Optional[List[float]] = None
             f"ROE = {resultados['SWR']:.2f}",
             f"RL = {resultados['RL_dB']:.2f} dB",
         ]
+
+        frecuencia_hz = resultados.get("frecuencia_hz")
+        if frecuencia_hz is not None:
+            lineas.append(f"f = {_formatear_frecuencia_hz(frecuencia_hz)}")
+
+        lambda_m = resultados.get("lambda_m")
+        if lambda_m is not None:
+            lineas.append(f"λ = {_formatear_longitud_m(lambda_m, signo=False)}")
+
         perfiles = resultados.get("perfiles_linea", [])
         if perfiles:
             lineas.append("\nDesplazamientos:")
@@ -1247,15 +1985,11 @@ def crear_grafica_completa(Z0, ZL, desplazamientos: Optional[List[float]] = None
                     if np.hypot(x_evt - x_m, y_evt - y_m) < marcador.get('radio_det', 0.05):
                         anot.xy = (x_m, y_m)
                         configurar_anotacion(ax_smith, (x_m, y_m))
-                        if marcador['nombre'].startswith("Longitud"):
-                            texto_lineas = [
-                                marcador['nombre'],
-                                f"Zi = {_formatear_complejo_rectangular(marcador['Zi'])} Ω" if marcador.get('Zi') else "Zi = ∞",
-                                f"∠Γ = {marcador.get('angulo', 0):.2f}°"
-                            ]
-                            anot.set_text("\n".join(texto_lineas))
+                        tooltip = marcador.get('tooltip')
+                        if tooltip:
+                            anot.set_text(tooltip)
                         else:
-                            anot.set_text(f"{marcador['nombre']}: {marcador['angulo_deg']:.2f}°")
+                            anot.set_text(f"{marcador['nombre']}: {marcador.get('angulo_deg', 0.0):.2f}°")
                         mostrar = True
                         break
                         
@@ -1276,6 +2010,7 @@ def crear_grafica_completa(Z0, ZL, desplazamientos: Optional[List[float]] = None
 
     fig.canvas.mpl_connect("motion_notify_event", on_move)
 
+    # Pregunta por exportar carta sola
     try:
         resp = input("\n¿Deseas guardar la carta de Smith sola (sin regletas) en un archivo? [s/N]: ").strip().lower()
     except (EOFError, KeyboardInterrupt):
@@ -1296,16 +2031,23 @@ def crear_grafica_completa(Z0, ZL, desplazamientos: Optional[List[float]] = None
         except (EOFError, KeyboardInterrupt, ValueError):
             dpi_val = 600
 
-        exportar_carta_smith_sola(Z0, ZL, resultados, perfiles_linea,
-                                  nombre_base=nombre_base,
-                                  formato=formato,
-                                  dpi=dpi_val)
+        exportar_carta_smith_sola(
+            Z0,
+            ZL,
+            resultados,
+            perfiles_linea,
+            nombre_base=nombre_base,
+            formato=formato,
+            dpi=dpi_val,
+            procedimiento_texto=procedimiento_texto,  # se pasa al PDF
+            texto_leyenda=texto_leyenda               # se pasa al PDF
+        )
 
     plt.show()
 
 def main():
-    Z0, ZL, desplazamientos = leer_parametros_usuario()
-    crear_grafica_completa(Z0, ZL, desplazamientos)
+    Z0, ZL, perfiles_config, parametros_linea = leer_parametros_usuario()
+    crear_grafica_completa(Z0, ZL, perfiles_config, parametros_linea)
 
 if __name__ == "__main__":
     main()
