@@ -167,6 +167,113 @@ def _formatear_longitud_m(valor_m: float, *, signo: bool = True) -> str:
         fmt = "{:+.2e}" if signo else "{:.2e}"
     return f"{fmt.format(valor_m)} m"
 
+
+_MAGNITUD_SUFIJOS = {
+    "": 1.0,
+    "v": 1.0,
+    "a": 1.0,
+    "m": 1e-3,
+    "k": 1e3,
+    "mv": 1e-3,
+    "ma": 1e-3,
+    "kv": 1e3,
+    "ka": 1e3,
+    "uv": 1e-6,
+    "ua": 1e-6,
+    "µv": 1e-6,
+    "µa": 1e-6,
+}
+
+
+def _parse_fasor_unidades(texto: str, unidad_base: str = "v") -> complex:
+    """Analiza magnitudes con sufijos (m, u, k) y ángulo opcional; devuelve un fasor complejo."""
+    s = texto.strip().lower().replace(',', '.').replace(' ', '')
+    if not s:
+        raise ValueError("La cadena está vacía.")
+
+    for simbolo in ('deg', '°'):
+        s = s.replace(simbolo, '')
+
+    if '∠' in s:
+        base, ang_str = s.split('∠', 1)
+    elif '<' in s:
+        base, ang_str = s.split('<', 1)
+    elif '@' in s:
+        base, ang_str = s.split('@', 1)
+    else:
+        base, ang_str = s, None
+
+    if not base:
+        raise ValueError("Faltó la magnitud del fasor.")
+
+    match = re.match(r'(?P<mag>[+-]?\d+(?:\.\d+)?(?:e[+-]?\d+)?)?(?P<unit>[a-zµ]*)', base)
+    if match is None or not match.group('mag'):
+        raise ValueError("No se pudo interpretar la magnitud.")
+
+    magnitud = float(match.group('mag'))
+    sufijo = match.group('unit') or ''
+    if sufijo not in _MAGNITUD_SUFIJOS:
+        # Permite omitir la unidad base final (ej. '8m' -> mV si unidad_base='v')
+        sufijo_extendido = sufijo + unidad_base
+        if sufijo_extendido in _MAGNITUD_SUFIJOS:
+            sufijo = sufijo_extendido
+        else:
+            raise ValueError("Unidad no reconocida para la magnitud.")
+
+    magnitud *= _MAGNITUD_SUFIJOS[sufijo]
+
+    if ang_str:
+        try:
+            ang_deg = float(ang_str)
+        except ValueError:
+            raise ValueError("Ángulo inválido en el fasor.")
+    else:
+        ang_deg = 0.0
+
+    return magnitud * np.exp(1j * np.radians(ang_deg))
+
+
+def _formatear_fasor(valor: complex, *, unidad: str = "V", decimales: int = 3) -> str:
+    """Formatea un fasor complejo en magnitud con sufijo adecuado y ángulo en grados."""
+    valor_c = complex(valor)
+    if not np.isfinite(valor_c):
+        return "∞"
+
+    magnitud = abs(valor_c)
+    ang_deg = _envolver_angulo_deg(np.degrees(np.angle(valor_c)))
+
+    escalas = [
+        (1e3, f"k{unidad}"),
+        (1.0, unidad),
+        (1e-3, f"m{unidad}"),
+        (1e-6, f"µ{unidad}"),
+    ]
+    for factor, etiqueta in escalas:
+        if magnitud >= factor:
+            mag_fmt = magnitud / factor
+            etiqueta_unidad = etiqueta
+            break
+    else:
+        mag_fmt = magnitud * 1e6
+        etiqueta_unidad = f"µ{unidad}"
+
+    return f"{mag_fmt:.{decimales}f} {etiqueta_unidad} ∠{ang_deg:.1f}°"
+
+
+def _formatear_fasor_opcional(
+    valor: Optional[complex], *, unidad: str = "V", decimales: int = 3
+) -> str:
+    """Devuelve un fasor formateado o N/D cuando el valor no es utilizable."""
+    if valor is None:
+        return "N/D"
+    try:
+        valor_c = complex(valor)
+    except Exception:
+        return "N/D"
+    if not np.isfinite(valor_c):
+        return "N/D"
+    return _formatear_fasor(valor_c, unidad=unidad, decimales=decimales)
+
 # Función para formatear números complejos en forma rectangular
 def _formatear_complejo_rectangular(valor: complex, decimales: int = 2) -> str:
     """Devuelve una representación 'a ± j b' con los decimales deseados."""
@@ -184,6 +291,40 @@ def _formatear_complejo_rectangular(valor: complex, decimales: int = 2) -> str:
 
     signo = '+' if imag >= 0 else '-'
     return f"{real:.{decimales}f} {signo} j{abs(imag):.{decimales}f}"
+
+
+def _formatear_complejo_opcional(valor: Optional[complex], decimales: int = 2) -> str:
+    """Formatea un complejo si es válido; caso contrario devuelve N/D."""
+    if valor is None:
+        return "N/D"
+    try:
+        valor_c = complex(valor)
+    except Exception:
+        return "N/D"
+    if not np.isfinite(valor_c):
+        return "N/D"
+    return _formatear_complejo_rectangular(valor_c, decimales=decimales)
+
+
+def _formatear_potencia_w(valor: Optional[float], decimales: int = 3) -> str:
+    """Formatea potencias promedio en W con escalas SI habituales."""
+    if valor is None or not np.isfinite(valor):
+        return "N/D"
+
+    magnitud = abs(valor)
+    escalas = [
+        (1e3, "kW"),
+        (1.0, "W"),
+        (1e-3, "mW"),
+        (1e-6, "µW"),
+        (1e-9, "nW"),
+    ]
+
+    for factor, etiqueta in escalas:
+        if magnitud >= factor:
+            return f"{valor / factor:.{decimales}f} {etiqueta}"
+
+    return f"{valor * 1e12:.{decimales}f} pW"
 
 # Función para leer los parámetros de usuario 
 def leer_parametros_usuario():
@@ -212,6 +353,7 @@ def leer_parametros_usuario():
         - tipo_carga
         - roe_resistiva (si aplica)
         - cargas_resistivas_equivalentes (si aplica)
+        - Vg_complex, Vg_is_rms, Zg (si se proporcionan)
     y la lista `perfiles_config` con las longitudes eléctricas solicitadas.
     """
     print("=== Generador interactivo de Carta de Smith (completa) ===")
@@ -427,6 +569,40 @@ def leer_parametros_usuario():
         print("Se ignorarán las distancias físicas porque no se especificó la frecuencia/VNP.")
         distancias_fisicas = []
 
+    # --- Datos del generador (opcional) ---
+    Vg_complex: Optional[complex] = None
+    Vg_es_rms: Optional[bool] = None
+    Zg: Optional[complex] = None
+
+    while True:
+        entrada_vg = input(
+            "\nVoltaje del generador Vg [V] (fasor o magnitud con ángulo, deja vacío para omitir): "
+        ).strip()
+        if not entrada_vg:
+            break
+        try:
+            Vg_complex = _parse_fasor_unidades(entrada_vg, unidad_base="v")
+        except ValueError:
+            print("No se pudo interpretar Vg. Ejemplos válidos: 8mV∠25, 0.008@25, 5e-3.")
+            continue
+        resp_rms = input("¿El valor ingresado corresponde a RMS? [s/N]: ").strip().lower()
+        Vg_es_rms = (resp_rms == 's')
+        break
+
+    if Vg_complex is not None:
+        while True:
+            entrada_zg = input(
+                "Impedancia interna del generador Zg [Ω] (ENTER para asumir Z0): "
+            ).strip()
+            if not entrada_zg:
+                Zg = Z0
+                break
+            try:
+                Zg = _parse_complejo_rectangular(entrada_zg)
+                break
+            except ValueError:
+                print("Entrada no válida para Zg. Usa el formato a+jb.")
+
     # --- Empaquetar parámetros de línea ---
     parametros_linea: Dict[str, Any] = {
         "tipo_carga": tipo_carga,
@@ -447,6 +623,11 @@ def leer_parametros_usuario():
         parametros_linea["roe_resistiva"] = roe_resistiva
     if cargas_resistivas_equivalentes is not None:
         parametros_linea["cargas_resistivas_equivalentes"] = cargas_resistivas_equivalentes
+    if Vg_complex is not None:
+        parametros_linea["Vg_complex"] = Vg_complex
+        parametros_linea["Vg_is_rms"] = bool(Vg_es_rms)
+        if Zg is not None:
+            parametros_linea["Zg"] = Zg
 
     return Z0, ZL, perfiles_config, parametros_linea
 
@@ -637,10 +818,138 @@ def calcular_reflexion_y_parametros(
             "distancias_fisicas",
             "roe_resistiva",
             "cargas_resistivas_equivalentes",
+            "Vg_complex",
+            "Vg_is_rms",
+            "Zg",
         ):
             valor = datos_linea.get(clave)
             if valor is not None:
                 resultados[clave] = valor
+
+    # --- Datos del generador y ondas incidente/reflejada ---
+    Vg_complex = resultados.get("Vg_complex")
+    if Vg_complex is not None:
+        Vg_is_rms = bool(resultados.get("Vg_is_rms", False))
+        Zg = resultados.get("Zg", Z0)
+        resultados["Zg"] = Zg
+
+        raiz2 = math.sqrt(2.0)
+        if Vg_is_rms:
+            Vg_rms = complex(Vg_complex)
+            Vg_peak = Vg_rms * raiz2
+        else:
+            Vg_peak = complex(Vg_complex)
+            Vg_rms = Vg_peak / raiz2
+
+        resultados["Vg_rms"] = Vg_rms
+        resultados["Vg_peak"] = Vg_peak
+
+        denom = Z0 + Zg
+        if np.isclose(abs(denom), 0.0, atol=1e-12):
+            V_plus_gen_rms = complex(np.nan)
+        else:
+            V_plus_gen_rms = Vg_rms * (Z0 / denom)
+        V_plus_gen_peak = V_plus_gen_rms * raiz2 if np.isfinite(V_plus_gen_rms) else complex(np.nan)
+
+        resultados["V_plus_gen_rms"] = V_plus_gen_rms
+        resultados["V_plus_gen_peak"] = V_plus_gen_peak
+
+        if np.isclose(abs(denom), 0.0, atol=1e-12):
+            gamma_g = complex(np.inf)
+        else:
+            gamma_g = (Zg - Z0) / denom
+        resultados["gamma_g"] = gamma_g
+
+        lambda_m = resultados.get("lambda_m")
+        longitud_total_m = resultados.get("longitud_total_m")
+        if lambda_m is not None and lambda_m > 0 and longitud_total_m is not None:
+            beta_rad_m = 2.0 * np.pi / lambda_m
+            fase_prop = np.exp(-1j * beta_rad_m * longitud_total_m)
+            resultados["beta_rad_m"] = beta_rad_m
+            resultados["fase_propagacion_gen_a_carga"] = fase_prop
+        else:
+            fase_prop = 1.0 + 0.0j
+        resultados["fase_propagacion_gen_a_carga"] = fase_prop
+
+        V_plus_load_rms = V_plus_gen_rms * fase_prop
+        V_plus_load_peak = V_plus_load_rms * raiz2
+        V_minus_load_rms = gamma_L * V_plus_load_rms
+        V_minus_load_peak = V_minus_load_rms * raiz2
+        V_load_rms = V_plus_load_rms + V_minus_load_rms
+        V_load_peak = V_load_rms * raiz2
+
+        resultados["V_plus_load_rms"] = V_plus_load_rms
+        resultados["V_plus_load_peak"] = V_plus_load_peak
+        resultados["V_minus_load_rms"] = V_minus_load_rms
+        resultados["V_minus_load_peak"] = V_minus_load_peak
+        resultados["V_load_rms"] = V_load_rms
+        resultados["V_load_peak"] = V_load_peak
+
+        if np.isclose(abs(fase_prop), 0.0, atol=1e-12):
+            V_minus_gen_rms = complex(np.nan)
+        else:
+            V_minus_gen_rms = V_minus_load_rms / fase_prop
+        V_minus_gen_peak = V_minus_gen_rms * raiz2 if np.isfinite(V_minus_gen_rms) else complex(np.nan)
+        resultados["V_minus_gen_rms"] = V_minus_gen_rms
+        resultados["V_minus_gen_peak"] = V_minus_gen_peak
+
+        if not np.isclose(abs(Z0), 0.0, atol=1e-12):
+            I_plus_gen_rms = V_plus_gen_rms / Z0
+            I_plus_gen_peak = I_plus_gen_rms * raiz2
+            I_minus_gen_rms = -V_minus_gen_rms / Z0 if np.isfinite(V_minus_gen_rms) else complex(np.nan)
+            I_minus_gen_peak = I_minus_gen_rms * raiz2 if np.isfinite(I_minus_gen_rms) else complex(np.nan)
+
+            I_plus_load_rms = V_plus_load_rms / Z0
+            I_plus_load_peak = I_plus_load_rms * raiz2
+            I_minus_load_rms = -V_minus_load_rms / Z0
+            I_minus_load_peak = I_minus_load_rms * raiz2
+            I_load_rms = I_plus_load_rms + I_minus_load_rms
+            I_load_peak = I_load_rms * raiz2
+        else:
+            I_plus_gen_rms = complex(np.nan)
+            I_plus_gen_peak = complex(np.nan)
+            I_minus_gen_rms = complex(np.nan)
+            I_minus_gen_peak = complex(np.nan)
+            I_plus_load_rms = complex(np.nan)
+            I_plus_load_peak = complex(np.nan)
+            I_minus_load_rms = complex(np.nan)
+            I_minus_load_peak = complex(np.nan)
+            I_load_rms = complex(np.nan)
+            I_load_peak = complex(np.nan)
+
+        resultados["I_plus_gen_rms"] = I_plus_gen_rms
+        resultados["I_plus_gen_peak"] = I_plus_gen_peak
+        resultados["I_minus_gen_rms"] = I_minus_gen_rms
+        resultados["I_minus_gen_peak"] = I_minus_gen_peak
+
+        resultados["I_plus_load_rms"] = I_plus_load_rms
+        resultados["I_plus_load_peak"] = I_plus_load_peak
+        resultados["I_minus_load_rms"] = I_minus_load_rms
+        resultados["I_minus_load_peak"] = I_minus_load_peak
+        resultados["I_load_rms"] = I_load_rms
+        resultados["I_load_peak"] = I_load_peak
+
+        if np.isfinite(V_plus_load_rms) and np.isfinite(I_plus_load_rms):
+            P_incidente = np.real(V_plus_load_rms * np.conjugate(I_plus_load_rms))
+        else:
+            P_incidente = np.nan
+
+        if np.isfinite(V_minus_load_rms) and np.isfinite(I_minus_load_rms):
+            P_reflejada = np.real(-V_minus_load_rms * np.conjugate(I_minus_load_rms))
+        else:
+            P_reflejada = np.nan
+
+        if np.isfinite(V_load_rms) and np.isfinite(I_load_rms):
+            P_carga = np.real(V_load_rms * np.conjugate(I_load_rms))
+        else:
+            P_carga = np.nan
+
+        P_entregada = P_incidente - P_reflejada if np.isfinite(P_incidente) and np.isfinite(P_reflejada) else np.nan
+
+        resultados["P_incidente_W"] = P_incidente
+        resultados["P_reflejada_W"] = P_reflejada
+        resultados["P_carga_W"] = P_carga
+        resultados["P_entregada_W"] = P_entregada
 
     # --- Cálculo de Rem-LE y número de campanas VROE cuando hay L total y λ ---
     lambda_m = resultados.get("lambda_m")
@@ -717,6 +1026,33 @@ def imprimir_procedimiento(Z0, ZL, resultados):
         dist_texto = ", ".join(f"{valor:+.4f}" for valor in distancias_fisicas)
         lineas.append(f"   Distancias físicas solicitadas d = {dist_texto} m")
 
+    Vg_ingresado = resultados.get("Vg_complex")
+    if Vg_ingresado is not None:
+        tipo_vg = "RMS" if resultados.get("Vg_is_rms") else "pico"
+        lineas.append("   Datos del generador:")
+        lineas.append(
+            f"      Vg ingresado ({tipo_vg}) = {_formatear_fasor_opcional(Vg_ingresado, unidad='V')}"
+        )
+        lineas.append(
+            f"      Vg (RMS) = {_formatear_fasor_opcional(resultados.get('Vg_rms'), unidad='V')}"
+        )
+        lineas.append(
+            f"      Vg (pico) = {_formatear_fasor_opcional(resultados.get('Vg_peak'), unidad='V')}"
+        )
+        lineas.append(
+            f"      Zg = {_formatear_complejo_opcional(resultados.get('Zg'))} Ω"
+        )
+        gamma_g = resultados.get("gamma_g")
+        if gamma_g is not None:
+            lineas.append(f"      Γ_g = {_formatear_complejo_opcional(gamma_g)}")
+        beta_val = resultados.get("beta_rad_m")
+        if beta_val is not None and np.isfinite(beta_val):
+            lineas.append(f"      β = {beta_val:.4f} rad/m")
+        fase_prop = resultados.get("fase_propagacion_gen_a_carga")
+        if fase_prop is not None and np.isfinite(fase_prop):
+            fase_texto = _formatear_complejo_opcional(fase_prop)
+            lineas.append(f"      e^(-jβℓ) = {fase_texto}")
+
     # Rem-LE y número de campanas VROE
     L_lambda = resultados.get("L_total_lambda")
     N_camp = resultados.get("N_camp_VROE")
@@ -790,10 +1126,44 @@ def imprimir_procedimiento(Z0, ZL, resultados):
     lineas.append(f"   |Coef. transmisión de tensión| = {resultados['T_E_mag']:.3f}")
     lineas.append(f"   ∠(1 + Γ_L) (ángulo del coef. de transmisión τ_L) = {resultados['tau_ang_deg']:.2f} °")
 
-    # 6) Impedancia vista en la carga
+    if Vg_ingresado is not None:
+        lineas.append("")
+        lineas.append("6) Ondas incidente/reflejada y potencias (con datos del generador):")
+        lineas.append(
+            f"   V+ en el generador (RMS) = {_formatear_fasor_opcional(resultados.get('V_plus_gen_rms'), unidad='V')}, "
+            f"V- en el generador (RMS) = {_formatear_fasor_opcional(resultados.get('V_minus_gen_rms'), unidad='V')}"
+        )
+        lineas.append(
+            f"   V+ en la carga (RMS) = {_formatear_fasor_opcional(resultados.get('V_plus_load_rms'), unidad='V')}, "
+            f"V- en la carga (RMS) = {_formatear_fasor_opcional(resultados.get('V_minus_load_rms'), unidad='V')}"
+        )
+        lineas.append(
+            f"   V total en la carga (RMS) = {_formatear_fasor_opcional(resultados.get('V_load_rms'), unidad='V')}"
+        )
+        lineas.append(
+            f"   I+ en la carga (RMS) = {_formatear_fasor_opcional(resultados.get('I_plus_load_rms'), unidad='A')}, "
+            f"I- en la carga (RMS) = {_formatear_fasor_opcional(resultados.get('I_minus_load_rms'), unidad='A')}"
+        )
+        lineas.append(
+            f"   I total en la carga (RMS) = {_formatear_fasor_opcional(resultados.get('I_load_rms'), unidad='A')}"
+        )
+        lineas.append(
+            f"   P incidente ≈ {_formatear_potencia_w(resultados.get('P_incidente_W'))}"
+        )
+        lineas.append(
+            f"   P reflejada ≈ {_formatear_potencia_w(resultados.get('P_reflejada_W'))}"
+        )
+        lineas.append(
+            f"   P entregada al sistema ≈ {_formatear_potencia_w(resultados.get('P_entregada_W'))}"
+        )
+        lineas.append(
+            f"   P absorbida por la carga ≈ {_formatear_potencia_w(resultados.get('P_carga_W'))}"
+        )
+
+    # 7) Impedancia vista en la carga
     Zi0 = resultados.get("Z_in_0")
     lineas.append("")
-    lineas.append("6) Impedancia vista en la carga (ℓ = 0):")
+    lineas.append("7) Impedancia vista en la carga (ℓ = 0):")
     lineas.append("   Fórmula general: Z_in(0) = Z0 · (1 + Γ_L) / (1 − Γ_L)")
     if Zi0 is not None:
         if isinstance(Zi0, complex) and np.isfinite(Zi0):
@@ -804,11 +1174,11 @@ def imprimir_procedimiento(Z0, ZL, resultados):
         else:
             lineas.append("   Z_in(0) = ∞ (circuito abierto ideal).")
 
-    # 7) Desplazamientos a lo largo de la línea (ZL′)
+    # 8) Desplazamientos a lo largo de la línea (ZL′)
     perfiles = resultados.get("perfiles_linea", [])
     if perfiles:
         lineas.append("")
-        lineas.append("7) Desplazamientos a lo largo de la línea (ZL′(ℓ)):")
+        lineas.append("8) Desplazamientos a lo largo de la línea (ZL′(ℓ)):")
         lineas.append("   Fórmula general: Γ(ℓ) = Γ_L · e^{-j4πℓ}")
         lineas.append("   Fórmula ZL′(ℓ): ZL′(ℓ) = Z0 · (1 + Γ(ℓ)) / (1 − Γ(ℓ))")
         for perfil in perfiles:
@@ -1614,6 +1984,15 @@ def _formato_valores_estatico(Z0, ZL, resultados) -> str:
     if lambda_m is not None:
         lineas.append(f"λ = {_formatear_longitud_m(lambda_m, signo=False)}")
 
+    Vg_val = resultados.get("Vg_complex")
+    if Vg_val is not None:
+        tipo = "RMS" if resultados.get("Vg_is_rms") else "pico"
+        lineas.append(f"Vg ({tipo}) = {_formatear_fasor_opcional(Vg_val, unidad='V')}")
+        lineas.append(f"Zg = {_formatear_complejo_opcional(resultados.get('Zg'))} Ω")
+        lineas.append(f"P_i ≈ {_formatear_potencia_w(resultados.get('P_incidente_W'))}")
+        lineas.append(f"P_r ≈ {_formatear_potencia_w(resultados.get('P_reflejada_W'))}")
+        lineas.append(f"P_L ≈ {_formatear_potencia_w(resultados.get('P_carga_W'))}")
+
     return "\n".join(lineas)
 
 # Función para anotar Γ_L en la exportación
@@ -1954,6 +2333,17 @@ def crear_grafica_completa(
         lambda_m = resultados.get("lambda_m")
         if lambda_m is not None:
             lineas.append(f"λ = {_formatear_longitud_m(lambda_m, signo=False)}")
+
+        Vg_val = resultados.get("Vg_complex")
+        if Vg_val is not None:
+            tipo = "RMS" if resultados.get("Vg_is_rms") else "pico"
+            lineas.append("")
+            lineas.append("Fuente y potencias:")
+            lineas.append(f"Vg ({tipo}) = {_formatear_fasor_opcional(Vg_val, unidad='V')}")
+            lineas.append(f"Zg = {_formatear_complejo_opcional(resultados.get('Zg'))} Ω")
+            lineas.append(f"P_i ≈ {_formatear_potencia_w(resultados.get('P_incidente_W'))}")
+            lineas.append(f"P_r ≈ {_formatear_potencia_w(resultados.get('P_reflejada_W'))}")
+            lineas.append(f"P_L ≈ {_formatear_potencia_w(resultados.get('P_carga_W'))}")
 
         perfiles = resultados.get("perfiles_linea", [])
         if perfiles:
