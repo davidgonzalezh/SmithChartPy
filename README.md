@@ -87,26 +87,26 @@ A partir de `Z0` y `ZL`, la función `calcular_reflexion_y_parametros` calcula:
 
 * **Impedancia normalizada**:
 
-  * ( z_N = \dfrac{Z_L}{Z_0} = r + jx ).
+  * $( z_N = \dfrac{Z_L}{Z_0} = r + jx )$.
 
 * **Coeficiente de reflexión en la carga**:
 
-  * ( \Gamma_L = \dfrac{Z_L - Z_0}{Z_L + Z_0} ) (caso general).
+  * $( \Gamma_L = \dfrac{Z_L - Z_0}{Z_L + Z_0} )$ (caso general).
   * Módulo `|Γ_L|` y **ángulo** `∠Γ_L` en grados.
   * Numerador `(ZL − Z0)` y denominador `(ZL + Z0)` se almacenan y se muestran en el informe.
 
 * **ROE (SWR)**:
 
-  * ( \text{ROE} = \dfrac{1 + |\Gamma_L|}{1 - |\Gamma_L|} ).
+  * $( \text{ROE} = \dfrac{1 + |\Gamma_L|}{1 - |\Gamma_L|} )$.
   * Si `|Γ_L| → 1`, el script marca `ROE → ∞`.
 
 * **Pérdidas y coeficientes asociados**:
 
-  * **Return Loss** positivo: ( RL = -20 \log_{10}(|\Gamma_L|) ).
+  * **Return Loss** positivo: $( RL = -20 \log_{10}(|\Gamma_L|) )$.
   * **Coef. de reflexión de tensión**: `|Γ|` y `20·log10(|Γ|)`.
   * **Coef. de reflexión de potencia**: `|Γ|² = Γ_P`.
   * **Potencia transmitida normalizada**: `P_trans = 1 − |Γ|²`.
-  * **Pérdida por desajuste** (mismatch loss): ( L_{mis} = -10 \log_{10}(1 - |\Gamma|^2) ).
+  * **Pérdida por desajuste** (mismatch loss): $( L_{mis} = -10 \log_{10}(1 - |\Gamma|^2) )$.
   * **Pérdida de retorno con signo negativo** `α_RL = −RL`.
   * **Pérdida de desacople** `α_des = −L_mis`.
   * **Atenuación equivalente asociada a |Γ|**: `ATTEN_dB = −20·log10(|Γ|)`.
@@ -119,12 +119,12 @@ A partir de `Z0` y `ZL`, la función `calcular_reflexion_y_parametros` calcula:
 
 * **Coeficiente de transmisión de tensión**:
 
-  * ( \tau_L = 1 + \Gamma_L ) y su ángulo `∠τ_L`.
+  * $( \tau_L = 1 + \Gamma_L )$ y su ángulo `∠τ_L`.
   * **Coef. de transmisión de potencia**: ( T_P = 1 - |\Gamma_L|^2 ).
 
 * **Impedancia vista en la carga**:
 
-  * ( Z_{in}(0) = Z_0 \dfrac{1 + \Gamma_L}{1 - \Gamma_L} ).
+  * $( Z_{in}(0) = Z_0 \dfrac{1 + \Gamma_L}{1 - \Gamma_L} )$.
 
 * **Longitud total de la línea en λ** (si se proporcionan `L` y `λ`):
 
@@ -135,8 +135,8 @@ A partir de `Z0` y `ZL`, la función `calcular_reflexion_y_parametros` calcula:
 
 Para cada longitud normalizada `ℓ` (o distancia `d` transformada a λ), el script calcula:
 
-* ( \Gamma(\ell) = \Gamma_L e^{-j4\pi \ell} ).
-* ( Z_{in}(\ell) = Z_0 \dfrac{1 + \Gamma(\ell)}{1 - \Gamma(\ell)} ).
+* $( \Gamma(\ell) = \Gamma_L e^{-j4\pi \ell} )$.
+* $( Z_{in}(\ell) = Z_0 \dfrac{1 + \Gamma(\ell)}{1 - \Gamma(\ell)} )$.
 
 El informe detalla para cada punto:
 
